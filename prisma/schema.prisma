@@ -1,0 +1,389 @@
+// Copyright (c) 2026 Web Prodigies LLC
+//
+// This source code is licensed under the MIT license found in the
+// LICENSE file in the root directory of this source tree.
+
+// ============================================================================
+// PRISMA SCHEMA
+// ============================================================================
+//
+// Foundation models for the app:
+//   1. Authentication (Better Auth)   — User, Session, Account, Verification, TwoFactor
+//   2. Multi-tenant organizations     — Organization, Member, Invitation, OrganizationRole
+//   3. Subscription billing            — Subscription
+//   4. Feature-gate usage tracking     — UsageMetrics
+//   5. Audit logging                   — ActivityLog
+//
+// Add your own domain models BELOW these with `organizationId` as the
+// tenancy key.
+//
+// SOURCE OF TRUTH RULE: Prisma is the source of truth for any data shape
+// it can describe. Never duplicate a database type into a TS interface.
+// Import from `@/generated/prisma` or use `Prisma.<Type>` helpers.
+// ============================================================================
+
+generator client {
+  provider = "prisma-client-js"
+  // Generated client lives inside src/ so imports stay typed and bundler-friendly
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================================================
+// BETTER AUTH — Core authentication models
+// ============================================================================
+//
+// These models are required by Better Auth and its plugins. The shape is
+// defined by Better Auth's schema generator — do NOT rename fields without
+// also updating the auth config and re-running `npx @better-auth/cli generate`.
+//
+// SOURCE OF TRUTH KEYWORDS: User, Session, Account, Verification, TwoFactor
+// ============================================================================
+
+/// User — the primary identity record. Links to all auth credentials,
+/// organization memberships, sessions, and audit logs.
+model User {
+  id                 String     @id
+  name               String
+  email              String     @unique
+  emailVerified      Boolean    @default(false)
+  image              String?
+  createdAt          DateTime   @default(now())
+  updatedAt          DateTime   @default(now()) @updatedAt
+
+  // Better Auth twoFactor plugin — flag indicating 2FA is enabled
+  twoFactorEnabled   Boolean?   @default(false)
+
+  // Better Auth admin plugin — 'admin' grants impersonation + admin endpoint access
+  role               String?
+  banExpires         DateTime?
+  banReason          String?
+  banned             Boolean?   @default(false)
+
+  // Application-level fields
+  onboardingComplete Boolean    @default(false)
+  firstName          String?
+  lastName           String?
+
+  // Relations
+  accounts         Account[]
+  sessions         Session[]
+  twofactors       TwoFactor[]
+  members          Member[]
+  invitations      Invitation[]
+  activityLogs     ActivityLog[]
+  cardFingerprints CardFingerprint[]
+
+  @@map("user")
+}
+
+/// Session — issued at sign-in, validated on every request.
+/// `activeOrganizationId` powers the org-scoped procedure (set lazily by
+/// Better Auth's organization plugin or by our session-create hook).
+model Session {
+  id                   String   @id
+  expiresAt            DateTime
+  token                String   @unique
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+  ipAddress            String?
+  userAgent            String?
+  userId               String
+
+  // Better Auth organization plugin — current active org for this session
+  activeOrganizationId String?
+
+  // Better Auth admin plugin — impersonation chain (admin user ID)
+  impersonatedBy       String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("session")
+}
+
+/// Account — credential record, one per provider per user (email+password,
+/// google, github, etc.). The `password` field stores the hash for email auth.
+model Account {
+  id                    String    @id
+  accountId             String
+  providerId            String
+  userId                String
+  accessToken           String?
+  refreshToken          String?
+  idToken               String?
+  accessTokenExpiresAt  DateTime?
+  refreshTokenExpiresAt DateTime?
+  scope                 String?
+  password              String?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+  user                  User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("account")
+}
+
+/// Verification — short-lived tokens for email verification, password reset,
+/// magic links, etc. Cleaned up automatically once consumed or expired.
+model Verification {
+  id         String   @id
+  identifier String
+  value      String
+  expiresAt  DateTime
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @default(now()) @updatedAt
+
+  @@map("verification")
+}
+
+/// TwoFactor — TOTP secret + backup codes for the 2FA plugin.
+model TwoFactor {
+  id          String @id
+  secret      String
+  backupCodes String
+  userId      String
+  user        User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("twoFactor")
+}
+
+// ============================================================================
+// ORGANIZATIONS — Multi-tenancy core
+// ============================================================================
+//
+// Every domain entity in this app should hang off Organization via an
+// `organizationId` foreign key. The protectedProcedure (see src/trpc/
+// procedures/protected.ts) guarantees that the active organization is
+// always present in ctx, so all queries can be safely scoped by tenant.
+//
+// SOURCE OF TRUTH KEYWORDS: Organization
+// ============================================================================
+
+/// Organization — a tenant. Owns all members, subscriptions, and domain data.
+model Organization {
+  id        String   @id
+  name      String
+  slug      String   @unique
+  logo      String?
+  createdAt DateTime
+  metadata  String?
+
+  // Billing — Stripe customer for this tenant. Set on first checkout / when a
+  // card is added, so a free org can store a payment method before subscribing.
+  // The Subscription model also carries stripeCustomerId; this is the durable
+  // org-level handle used by resolveExistingStripeCustomerId (payment.service).
+  stripeCustomerId String?
+
+  // Platform admin — when true, this org is the operator's "portal" workspace.
+  // getOrganizationTier short-circuits it to the hidden, unlimited `portal`
+  // tier, and its members get the /portal super-admin console. Bootstrapped
+  // from PORTAL_INITIAL_OWNER_EMAIL (src/lib/config/portal.ts).
+  isPortalOrganization Boolean @default(false)
+
+  // Relations
+  members           Member[]
+  invitations       Invitation[]
+  organizationroles OrganizationRole[]
+  subscriptions     Subscription[]
+  usageMetrics      UsageMetrics[]
+  activityLogs      ActivityLog[]
+
+  @@map("organization")
+}
+
+/// Member — links a User to an Organization with a role (owner | admin | member
+/// | <custom-role>). Custom roles are defined in OrganizationRole.
+///
+/// SOURCE OF TRUTH KEYWORD: Member
+model Member {
+  id             String   @id
+  organizationId String
+  userId         String
+  role           String
+  createdAt      DateTime
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("member")
+}
+
+/// Invitation — pending invite to join an organization. Becomes a Member on
+/// accept; cancellation or expiration deletes the row (hard delete only, per
+/// the project's no-soft-delete rule). The mere existence of a row implies
+/// "pending"; status is encoded by presence rather than a column.
+model Invitation {
+  id             String   @id
+  organizationId String
+  email          String
+  role           String?
+  expiresAt      DateTime
+  createdAt      DateTime @default(now())
+  inviterId      String
+
+  user         User         @relation(fields: [inviterId], references: [id], onDelete: Cascade)
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@map("invitation")
+}
+
+/// OrganizationRole — custom roles created per-org. ONE row per (organization,
+/// role); the `permission` column stores a JSON object map of the form
+/// `{ "<resource>": ["<action>", ...] }` (e.g. `{"member":["read"],"projects":
+/// ["read","create"]}`). The organizationRoles router writes it; the tRPC
+/// context (src/trpc/init.ts) JSON-parses it and flattens to `resource:action`
+/// strings to drive requirePermission checks. The static `owner` role is NOT
+/// stored here — owners get a sentinel "all access" in the context resolver.
+///
+/// Use this together with the permission statement built in
+/// src/lib/better-auth/permissions.ts.
+///
+/// SOURCE OF TRUTH KEYWORD: OrganizationRole
+model OrganizationRole {
+  id             String       @id
+  organizationId String
+  role           String
+  permission     String
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime?    @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@map("organizationRole")
+}
+
+// ============================================================================
+// BILLING — Subscription tier (drives feature gates)
+// ============================================================================
+
+/// Subscription — links an Organization to a Stripe subscription and plan tier.
+/// The `plan` field MUST match a key in `PLANS` (src/lib/config/plans.ts) — e.g.
+/// "free" | "starter" | "pro" | "enterprise". Resolving the org's tier reads
+/// this row's plan when status is active/trialing.
+///
+/// SOURCE OF TRUTH KEYWORD: Subscription
+model Subscription {
+  id                   String       @id
+  plan                 String       // Must match a key in `PLANS` (src/lib/config/plans.ts)
+  referenceId          String       // Organization ID this subscription belongs to
+  stripeCustomerId     String?
+  stripeSubscriptionId String?
+  status               String       @default("incomplete") // incomplete|active|trialing|past_due|canceled
+  periodStart          DateTime?
+  periodEnd            DateTime?
+  cancelAtPeriodEnd    Boolean      @default(false)
+  seats                Int?
+  trialStart           DateTime?
+  trialEnd             DateTime?
+  createdAt            DateTime     @default(now())
+  updatedAt            DateTime     @updatedAt
+
+  organization Organization @relation(fields: [referenceId], references: [id], onDelete: Cascade)
+
+  @@map("subscription")
+}
+
+/// CardFingerprint — free-trial abuse prevention. Stores the Stripe card
+/// `fingerprint` (a stable hash of the card, identical across re-tokenizations
+/// and across customers) per user, with a `usedFreeTrial` flag. Before granting
+/// a trial, billing checks whether this user OR any user has already used a
+/// trial with the same card fingerprint. Tracking is best-effort and
+/// non-critical: every read fails OPEN (allows the trial) so a Stripe/DB hiccup
+/// never blocks a legitimate signup.
+///
+/// SOURCE OF TRUTH KEYWORD: CardFingerprint
+model CardFingerprint {
+  id            String   @id @default(cuid())
+  userId        String
+  fingerprint   String   // Stripe card fingerprint (pm.card.fingerprint)
+  usedFreeTrial Boolean  @default(false)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // One row per (user, card); fingerprint indexed for the cross-user lookup.
+  @@unique([userId, fingerprint])
+  @@index([fingerprint])
+  @@index([userId])
+  @@map("cardFingerprint")
+}
+
+// ============================================================================
+// FEATURE GATE USAGE TRACKING
+// ============================================================================
+
+/// UsageMetrics — current consumption of a "limit" resource for an org.
+/// Writes happen via incrementUsage() / decrementUsage() in
+/// src/services/usage.service.ts. Reads happen via getFeatureGates() in
+/// src/lib/feature-gate.ts, which combines this with the plan config to
+/// compute remaining quota.
+///
+/// One row per (organization, featureKey). The `featureKey` column stores the
+/// BARE resource key from `RESOURCES` (src/lib/resources.ts) — e.g. `"projects"`,
+/// `"storage"`, `"apiCalls"`. The column name is historical; semantically it is
+/// a `LimitResourceKey`.
+///
+/// SOURCE OF TRUTH KEYWORD: UsageMetrics
+model UsageMetrics {
+  id             String   @id @default(cuid())
+  organizationId String
+  featureKey     String   // A LimitResourceKey from `RESOURCES` (src/lib/resources.ts)
+  currentUsage   Int      @default(0)
+  lastResetAt    DateTime @default(now())
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  // Composite uniqueness so each org has at most one row per featureKey
+  @@unique([organizationId, featureKey])
+  @@index([organizationId])
+  @@map("usageMetrics")
+}
+
+// ============================================================================
+// AUDIT LOG (forensic-grade)
+// ============================================================================
+
+/// ActivityLog — append-only audit trail. Written via logActivity() in
+/// src/services/activity-log.service.ts inside the same transaction as the
+/// handler mutation, so the audit row and the business data commit together
+/// (or both roll back).
+///
+/// SECURITY: ipAddress and userAgent are forensic fields. They are written
+/// by the server (via getRequestForensics) and MUST NEVER be returned to
+/// any frontend endpoint. Reads from this table go through the
+/// AUDIT_LOG_SAFE_SELECT pick which deliberately omits both fields.
+///
+/// SOURCE OF TRUTH KEYWORD: ActivityLog
+model ActivityLog {
+  id             String   @id @default(cuid())
+  userId         String   // Actor — the user who performed the action
+  organizationId String   // Tenant scope
+  action         String   // "create" | "update" | "delete" | <custom verb>
+  entity         String   // Entity type — e.g., "project", "member", "invitation"
+  entityId       String?  // Affected entity ID (optional for org-level actions)
+  description    String?  // Human-readable summary, e.g., "Renamed Project 'A' → 'B'"
+  metadata       Json?    // Structured before/after diff or extra context
+  ipAddress      String?  // FORENSIC ONLY — never exposed to frontend
+  userAgent      String?  // FORENSIC ONLY — never exposed to frontend
+  createdAt      DateTime @default(now())
+
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  // Indexes tuned for the most common queries: org timeline, user timeline,
+  // and recent-activity dashboards. Add additional indexes only when a real
+  // query proves they're needed.
+  @@index([organizationId])
+  @@index([userId])
+  @@index([createdAt])
+  @@index([organizationId, createdAt])
+  @@index([action])
+  @@index([entity])
+  @@map("activity_log")
+}
