@@ -106,7 +106,8 @@ export async function cut(
   source: Source,
   ranges: ClipRange[],
   transcript: Transcript | undefined,
-  outDir: string
+  outDir: string,
+  onProgress?: (done: number, total: number) => void
 ): Promise<ClipResult[]> {
   const duration = transcript?.duration
   const pad = mediaConfig.sectionPaddingSec
@@ -151,6 +152,7 @@ export async function cut(
       sizeBytes: size,
       range: { ...range, start, end },
     })
+    onProgress?.(index, ranges.length)
   }
 
   log(`done: ${results.length} clips in ${outDir}`)

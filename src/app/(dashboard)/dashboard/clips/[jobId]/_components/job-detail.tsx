@@ -6,21 +6,36 @@
  */
 
 /**
- * SOURCE OF TRUTH KEYWORDS: JobDetail, ClipCard
+ * SOURCE OF TRUTH KEYWORDS: JobDetail, ClipCard, useAnimatedProgress,
+ *   useElapsed, useRotatingHint
  *
- * WHAT:  A clip job's detail view — a live stage stepper while processing, then
- *        the clip grid with inline video preview + download, plus cancel/delete.
- * WHY:   Polls clips.get every 1.5s while active and stops on a terminal status.
- *        Video/thumbnail URLs are short-lived signed URLs minted by the router.
+ * WHAT:  A clip job's detail view — a live, always-moving progress panel while
+ *        processing (real percentage + elapsed time + a per-stage task list with
+ *        rotating status hints), then the clip grid with preview + download.
+ * WHY:   Long stages (download, transcription) would otherwise look frozen. The
+ *        percentage eases toward the server value and gently "creeps" within the
+ *        current stage so it always feels alive, while the task list makes the
+ *        real work legible. Polls clips.get every 1.5s and stops when terminal.
  * WHERE: Rendered by the /dashboard/clips/[jobId] page.
  */
 
 'use client'
 
+import * as React from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { toast } from 'sonner'
-import { AlertTriangle, ArrowLeft, CheckCircle2, Download, Trash2, XCircle } from 'lucide-react'
+import {
+  AlertTriangle,
+  ArrowLeft,
+  CheckCircle2,
+  Circle,
+  Clock,
+  Download,
+  Loader2,
+  Trash2,
+  XCircle,
+} from 'lucide-react'
 
 import { trpc } from '@/trpc/react-provider'
 import { useActiveOrganizationId } from '@/hooks/use-active-organization'
@@ -39,6 +54,100 @@ import {
   type ClipItem,
 } from '../../_components/clip-status'
 
+/* Soft ceiling the animated bar may "creep" to within each stage (just short of
+ * the next real milestone) so a static server value never looks stuck. */
+function stageCeiling(status: string): number {
+  switch (status) {
+    case 'QUEUED':
+      return 4
+    case 'DOWNLOADING':
+      return 15
+    case 'TRANSCRIBING':
+      return 58
+    case 'ANALYZING':
+      return 69
+    case 'CUTTING':
+      return 97
+    default:
+      return 100
+  }
+}
+
+/* Rotating flavour lines per stage — keeps the panel feeling alive during the
+ * stages that don't emit granular server progress. */
+const STAGE_HINTS: Record<string, readonly string[]> = {
+  QUEUED: ['Waiting for a free worker…'],
+  DOWNLOADING: ['Fetching just the audio (fast & light)…', 'No full video download needed…'],
+  TRANSCRIBING: [
+    'Transcribing speech to text…',
+    'Aligning every word to a timestamp…',
+    'Longer videos take a little longer…',
+  ],
+  ANALYZING: [
+    'Reading the full transcript…',
+    'Finding the most viral moments…',
+    'Scoring hooks, payoffs & emotion…',
+  ],
+  CUTTING: ['Rendering clips…', 'Snapping edits to natural pauses…', 'Almost there…'],
+}
+
+function useAnimatedProgress(serverProgress: number, status: string, active: boolean): number {
+  const [creep, setCreep] = React.useState(serverProgress)
+  const serverRef = React.useRef(serverProgress)
+  const statusRef = React.useRef(status)
+
+  // Keep the latest values in refs (updated in an effect, never during render)
+  // so the interval reads them without being torn down on every poll.
+  React.useEffect(() => {
+    serverRef.current = serverProgress
+    statusRef.current = status
+  }, [serverProgress, status])
+
+  React.useEffect(() => {
+    if (!active) return
+    const id = setInterval(() => {
+      setCreep((current) => {
+        const base = Math.max(current, serverRef.current)
+        const ceil = stageCeiling(statusRef.current)
+        if (base >= ceil) return base
+        return Math.min(ceil, base + Math.max(0.15, (ceil - base) * 0.04))
+      })
+    }, 450)
+    return () => clearInterval(id)
+  }, [active])
+
+  // Snap-up is a render-time max() (no setState-in-effect); the interval only
+  // grows the gentle creep toward the current stage ceiling.
+  if (!active) return status === 'COMPLETED' ? 100 : Math.round(serverProgress)
+  return Math.round(Math.max(creep, serverProgress))
+}
+
+function useElapsed(createdAt: Date | undefined, active: boolean): string {
+  const [now, setNow] = React.useState(() => Date.now())
+  React.useEffect(() => {
+    if (!active) return
+    const id = setInterval(() => setNow(Date.now()), 1000)
+    return () => clearInterval(id)
+  }, [active])
+  if (!createdAt) return '0:00'
+  const secs = Math.max(0, Math.floor((now - new Date(createdAt).getTime()) / 1000))
+  const m = Math.floor(secs / 60)
+  const s = secs % 60
+  return `${m}:${String(s).padStart(2, '0')}`
+}
+
+function useRotatingHint(status: string, active: boolean): string | null {
+  const [tick, setTick] = React.useState(0)
+  React.useEffect(() => {
+    if (!active) return
+    const id = setInterval(() => setTick((t) => t + 1), 2800)
+    return () => clearInterval(id)
+  }, [active, status])
+  const list = STAGE_HINTS[status]
+  if (!list || list.length === 0) return null
+  return list[tick % list.length] ?? null
+}
+
 export function JobDetail({ jobId }: { jobId: string }) {
   const organizationId = useActiveOrganizationId()
   const router = useRouter()
@@ -55,6 +164,11 @@ export function JobDetail({ jobId }: { jobId: string }) {
       refetchInterval: (query) => (isActiveStatus(query.state.data?.status ?? '') ? 1500 : false),
     }
   )
+
+  const active = job ? isActiveStatus(job.status) : false
+  const displayPct = useAnimatedProgress(job?.progress ?? 0, job?.status ?? 'QUEUED', active)
+  const elapsed = useElapsed(job?.createdAt, active)
+  const hint = useRotatingHint(job?.status ?? 'QUEUED', active)
 
   const cancel = trpc.clips.cancel.useMutation({
     onSuccess: () => {
@@ -93,7 +207,6 @@ export function JobDetail({ jobId }: { jobId: string }) {
     )
   }
 
-  const active = isActiveStatus(job.status)
   const currentStageIndex = STAGE_STEPS.findIndex((step) => step.key === job.status)
   const heading = job.title ?? job.sourceUrl ?? 'Uploaded video'
 
@@ -146,40 +259,55 @@ export function JobDetail({ jobId }: { jobId: string }) {
       {active ? (
         <Card>
           <CardContent className="space-y-5 py-6">
-            <Progress value={job.progress} />
-            <div className="flex items-center justify-between">
+            <div className="flex items-end justify-between">
+              <div>
+                <div className="text-3xl font-semibold tabular-nums">{displayPct}%</div>
+                <p className="text-muted-foreground mt-1 text-sm">{job.currentStage ?? 'Starting…'}</p>
+              </div>
+              <div className="text-muted-foreground flex items-center gap-1 text-xs">
+                <Clock className="size-3" />
+                {elapsed}
+              </div>
+            </div>
+
+            <Progress value={displayPct} />
+
+            <ul className="space-y-3 pt-1">
               {STAGE_STEPS.map((step, i) => {
                 const done = currentStageIndex > i
                 const isCurrent = currentStageIndex === i
                 return (
-                  <div key={step.key} className="flex flex-1 flex-col items-center gap-2">
-                    <div
-                      className={cn(
-                        'flex size-8 items-center justify-center rounded-full border text-xs',
-                        done
-                          ? 'bg-primary text-primary-foreground border-primary'
-                          : isCurrent
-                            ? 'border-primary text-primary'
-                            : 'text-muted-foreground'
+                  <li key={step.key} className="flex items-start gap-3">
+                    <span className="mt-0.5 shrink-0">
+                      {done ? (
+                        <CheckCircle2 className="text-primary size-5" />
+                      ) : isCurrent ? (
+                        <Loader2 className="text-primary size-5 animate-spin" />
+                      ) : (
+                        <Circle className="text-muted-foreground/40 size-5" />
                       )}
-                    >
-                      {done ? <CheckCircle2 className="size-4" /> : i + 1}
-                    </div>
-                    <span
-                      className={cn(
-                        'text-xs',
-                        isCurrent ? 'text-foreground font-medium' : 'text-muted-foreground'
-                      )}
-                    >
-                      {step.label}
                     </span>
-                  </div>
+                    <div className="flex-1">
+                      <p
+                        className={cn(
+                          'text-sm',
+                          isCurrent
+                            ? 'text-foreground font-medium'
+                            : done
+                              ? 'text-foreground'
+                              : 'text-muted-foreground'
+                        )}
+                      >
+                        {step.label}
+                      </p>
+                      {isCurrent && hint ? (
+                        <p className="text-muted-foreground text-xs">{hint}</p>
+                      ) : null}
+                    </div>
+                  </li>
                 )
               })}
-            </div>
-            <p className="text-muted-foreground text-center text-sm">
-              {job.currentStage ?? 'Queued…'}
-            </p>
+            </ul>
           </CardContent>
         </Card>
       ) : null}

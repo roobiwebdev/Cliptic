@@ -36,6 +36,37 @@ export function run(cmd: string, args: string[]): Promise<void> {
   })
 }
 
+/**
+ * Run a command, streaming stdout+stderr to `onLine` line-by-line (handles
+ * both \n and \r so progress bars that use carriage returns are parsed too).
+ * Used to surface real yt-dlp download progress to the UI.
+ */
+export function runWithProgress(
+  cmd: string,
+  args: string[],
+  onLine: (line: string) => void
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(cmd, args, { stdio: ['ignore', 'pipe', 'pipe'] })
+    let buffer = ''
+    const handle = (chunk: Buffer) => {
+      buffer += chunk.toString()
+      const parts = buffer.split(/\r|\n/)
+      buffer = parts.pop() ?? ''
+      for (const line of parts) {
+        const trimmed = line.trim()
+        if (trimmed) onLine(trimmed)
+      }
+    }
+    child.stdout?.on('data', handle)
+    child.stderr?.on('data', handle)
+    child.on('error', (err) => reject(friendly(cmd, err)))
+    child.on('close', (code) =>
+      code === 0 ? resolve() : reject(new Error(`${cmd} exited with code ${code}`))
+    )
+  })
+}
+
 /** Run a command and resolve with its trimmed stdout. */
 export function capture(cmd: string, args: string[]): Promise<string> {
   return new Promise((resolve, reject) => {
