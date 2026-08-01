@@ -50,6 +50,11 @@ function ytdlpAuthArgs(): string[] {
   const args: string[] = []
   if (cookiesPath) args.push('--cookies', cookiesPath)
   if (mediaConfig.download.proxy) args.push('--proxy', mediaConfig.download.proxy)
+  /* PO token: only when a provider is configured (worker container). Locally
+   * this is unset, so yt-dlp behaves exactly as before. */
+  if (mediaConfig.download.potBaseUrl) {
+    args.push('--extractor-args', `youtubepot-bgutilhttp:base_url=${mediaConfig.download.potBaseUrl}`)
+  }
   return args
 }
 
