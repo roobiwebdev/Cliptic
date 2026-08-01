@@ -79,6 +79,14 @@ export type {
 export {
   clipSourceTypeSchema,
   createClipJobSchema,
+  clipJobRefSchema,
+  listClipJobsSchema,
+  createUploadUrlSchema,
   CLIP_STAGE_PROGRESS,
 } from './clips'
-export type { ClipJobPayload, CreateClipJobValues } from './clips'
+export type {
+  ClipJobPayload,
+  CreateClipJobValues,
+  ListClipJobsValues,
+  CreateUploadUrlValues,
+} from './clips'

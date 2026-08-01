@@ -25,7 +25,17 @@ import type { Job } from 'bullmq'
 import { prisma } from '@/lib/config/prisma'
 import { registerProcessor, QUEUE_NAMES } from '@/lib/queue'
 import { CLIP_STAGE_PROGRESS, type ClipJobPayload } from '@/lib/types'
-import { resolveSource, transcribe, analyze, cut, mediaConfig, type Transcript } from '@/lib/media-pipeline'
+import {
+  resolveSource,
+  transcribe,
+  analyze,
+  cut,
+  probeDuration,
+  mediaConfig,
+  type Transcript,
+} from '@/lib/media-pipeline'
+import { getOrganizationTier } from '@/lib/feature-gate'
+import { getClipPlanLimits } from '@/lib/config/clip-limits'
 import {
   putObject,
   downloadToFile,
@@ -93,9 +103,22 @@ async function handleClipJob(job: Job): Promise<void> {
       })
     }
 
+    // Enforce the per-plan max video length BEFORE the expensive AI stages.
+    const durationSec = await probeDuration(source.audioPath)
+    const caps = getClipPlanLimits((await getOrganizationTier(organizationId)).tier)
+    if (Number.isFinite(caps.maxVideoMinutes) && durationSec / 60 > caps.maxVideoMinutes) {
+      throw new Error(
+        `This video is ${Math.round(durationSec / 60)} minutes long, which exceeds your plan limit of ${caps.maxVideoMinutes} minutes. Upgrade your plan for longer videos.`
+      )
+    }
+
     await prisma.clipJob.update({
       where: { id: clipJobId },
-      data: { externalVideoId: source.videoId, progress: CLIP_STAGE_PROGRESS.DOWNLOADING },
+      data: {
+        externalVideoId: source.videoId,
+        durationSec,
+        progress: CLIP_STAGE_PROGRESS.DOWNLOADING,
+      },
     })
     if (await isCanceled(clipJobId)) return
 
