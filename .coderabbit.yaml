@@ -1,0 +1,36 @@
+# CodeRabbit config — AI review on every PR. Install the CodeRabbit GitHub app
+# on the Cliptic repo to activate. Docs: https://docs.coderabbit.ai
+language: en-US
+reviews:
+  profile: assertive
+  request_changes_workflow: false
+  high_level_summary: true
+  poem: false
+  review_status: true
+  auto_review:
+    enabled: true
+    drafts: false
+    base_branches:
+      - dev
+      - main
+  path_instructions:
+    - path: "src/services/**"
+      instructions: >
+        Services must start with `import 'server-only'` and contain ONLY pure
+        Prisma/data-access calls — no auth, audit, transactions, or business
+        rules (those belong in tRPC routers). Flag any violation.
+    - path: "src/trpc/routers/**"
+      instructions: >
+        Data mutations must use protectedProcedure. Flag any hand-rolled auth,
+        permission, plan-limit, or audit logic that duplicates the procedure
+        factory. Business logic lives here, not in services.
+    - path: "src/lib/types/**"
+      instructions: >
+        All custom TypeScript types live here. Flag `any`, `unknown` casts, or
+        types duplicated from Prisma (`@/generated/prisma`) or router inference.
+    - path: "src/worker/**"
+      instructions: >
+        Worker code is a trusted backend process. Ensure scratch dirs are always
+        cleaned up in a finally block and job state is persisted per stage.
+chat:
+  auto_reply: true

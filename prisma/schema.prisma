@@ -77,6 +77,7 @@ model User {
   invitations      Invitation[]
   activityLogs     ActivityLog[]
   cardFingerprints CardFingerprint[]
+  clipJobs         ClipJob[]
 
   @@map("user")
 }
@@ -190,6 +191,8 @@ model Organization {
   subscriptions     Subscription[]
   usageMetrics      UsageMetrics[]
   activityLogs      ActivityLog[]
+  clipJobs          ClipJob[]
+  clips             Clip[]
 
   @@map("organization")
 }
@@ -386,4 +389,102 @@ model ActivityLog {
   @@index([action])
   @@index([entity])
   @@map("activity_log")
+}
+
+// ============================================================================
+// CLIPTIC — AI video clipping (domain models)
+// ============================================================================
+//
+// A ClipJob is one long-running pipeline run (link/upload → audio → transcript
+// → AI-selected ranges → cut clips), executed on the BullMQ worker, NOT in a
+// request. Job state lives here (single source of truth) so the UI can poll
+// progress and retries can resume from the last checkpoint. Every row is scoped
+// by organizationId (tenancy) — see src/trpc/procedures/protected.ts.
+//
+// SOURCE OF TRUTH KEYWORDS: ClipJob, Clip, ClipJobStatus, ClipSourceType
+// ============================================================================
+
+/// Pipeline lifecycle. Advances QUEUED → DOWNLOADING → TRANSCRIBING →
+/// ANALYZING → CUTTING → COMPLETED; any active state can go to FAILED; a
+/// queued/active job can be CANCELED. The worker writes this after each stage.
+enum ClipJobStatus {
+  QUEUED
+  DOWNLOADING
+  TRANSCRIBING
+  ANALYZING
+  CUTTING
+  COMPLETED
+  FAILED
+  CANCELED
+}
+
+/// Where the source video comes from. YOUTUBE = yt-dlp on `sourceUrl`;
+/// UPLOAD = a user file already in R2 at `uploadKey`.
+enum ClipSourceType {
+  YOUTUBE
+  UPLOAD
+}
+
+/// ClipJob — one clip-generation run for an organization.
+///
+/// SOURCE OF TRUTH KEYWORD: ClipJob
+model ClipJob {
+  id              String         @id @default(cuid())
+  organizationId  String
+  userId          String // actor who started the job
+  status          ClipJobStatus  @default(QUEUED)
+  sourceType      ClipSourceType
+  sourceUrl       String? // YOUTUBE: the pasted URL
+  uploadKey       String? // UPLOAD: R2 key of the uploaded source file
+  externalVideoId String? // yt-dlp video id, or a content hash for uploads
+  title           String?
+  durationSec     Float?
+  progress        Int            @default(0) // 0–100, weighted rollup for the UI bar
+  currentStage    String? // human label of the active stage
+  clipCount       Int            @default(0)
+  error           String? // user-safe failure message (never raw internals)
+  llmProvider     String? // snapshot of provider used, for audit/repro
+  transcriber     String?
+  transcriptKey   String? // R2 key of the cached transcript (retry checkpoint)
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+  completedAt     DateTime?
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  clips        Clip[]
+
+  @@index([organizationId])
+  @@index([organizationId, createdAt])
+  @@index([status])
+  @@map("clip_job")
+}
+
+/// Clip — a single rendered short clip produced by a ClipJob. `organizationId`
+/// is denormalized so tenant-scoped queries and signed-URL ownership checks
+/// don't need to join through ClipJob.
+///
+/// SOURCE OF TRUTH KEYWORD: Clip
+model Clip {
+  id             String   @id @default(cuid())
+  clipJobId      String
+  organizationId String
+  index          Int // 1-based order within the job
+  title          String?
+  reason         String? // why the AI picked this moment
+  score          Int? // 0–100 virality guess (optional)
+  startSec       Float
+  endSec         Float
+  r2Key          String // R2 object key of the rendered mp4
+  thumbnailKey   String? // R2 object key of the poster image
+  sizeBytes      Int?
+  durationSec    Float?
+  createdAt      DateTime @default(now())
+
+  clipJob      ClipJob      @relation(fields: [clipJobId], references: [id], onDelete: Cascade)
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([clipJobId])
+  @@index([organizationId])
+  @@map("clip")
 }

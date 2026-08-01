@@ -38,6 +38,8 @@ export type { AuthRouteKey } from './auth-routes'
 export { ROUTES } from './routes'
 export type { AppRouteKey } from './routes'
 export { REGISTRATION_OPEN } from './registration'
+export { CLIP_PLAN_LIMITS, getClipPlanLimits } from './clip-limits'
+export type { ClipPlanLimits } from './clip-limits'
 export {
   PLAN_KEYS,
   PLANS,
