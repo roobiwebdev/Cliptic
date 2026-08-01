@@ -21,6 +21,7 @@ export type { ResolveSourceParams } from './stages/source'
 export { transcribe } from './stages/transcribe'
 export { analyze } from './stages/analyze'
 export { cut } from './stages/cut'
+export { probeDuration } from './lib/media'
 export { mediaConfig } from './config'
 export type {
   Source,
