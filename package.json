@@ -5,6 +5,7 @@
   "packageManager": "pnpm@10.30.3",
   "scripts": {
     "dev": "next dev",
+    "dev:all": "bash scripts/dev.sh",
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
