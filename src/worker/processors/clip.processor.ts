@@ -23,8 +23,9 @@ import path from 'node:path'
 import { mkdir, rm, readFile } from 'node:fs/promises'
 import type { Job } from 'bullmq'
 import { prisma } from '@/lib/config/prisma'
+import type { Prisma } from '@/generated/prisma'
 import { registerProcessor, QUEUE_NAMES } from '@/lib/queue'
-import { CLIP_STAGE_PROGRESS, type ClipJobPayload } from '@/lib/types'
+import { CLIP_STAGE_PROGRESS, type ClipJobPayload, type ClipJobTimings } from '@/lib/types'
 import {
   resolveSource,
   transcribe,
@@ -33,6 +34,7 @@ import {
   probeDuration,
   mediaConfig,
   type Transcript,
+  type ClipResult,
 } from '@/lib/media-pipeline'
 import { getOrganizationTier } from '@/lib/feature-gate'
 import { getClipPlanLimits } from '@/lib/config/clip-limits'
@@ -83,17 +85,11 @@ async function handleClipJob(job: Job): Promise<void> {
       })
       .catch(() => {})
   }
-  const reportCut = (done: number, total: number): void => {
-    const mapped = 70 + Math.round((done / Math.max(1, total)) * 30) // 70–100
-    void prisma.clipJob
-      .update({
-        where: { id: clipJobId },
-        data: { progress: mapped, currentStage: `Cutting clip ${done} of ${total}` },
-      })
-      .catch(() => {})
-  }
-
   try {
+    const startedAt = Date.now()
+    let mark = startedAt
+    const timings: ClipJobTimings = {}
+
     // ── STAGE 1: source (download audio-only / fetch upload) ──────────────
     await prisma.clipJob.update({
       where: { id: clipJobId },
@@ -146,6 +142,10 @@ async function handleClipJob(job: Job): Promise<void> {
         progress: CLIP_STAGE_PROGRESS.DOWNLOADING,
       },
     })
+    timings.downloadMs = Date.now() - mark
+    timings.durationSec = Math.round(durationSec)
+    mark = Date.now()
+    console.log(`[timing] download+transcode ${(timings.downloadMs / 1000).toFixed(1)}s`)
     if (await isCanceled(clipJobId)) return
 
     // ── STAGE 2: transcribe (checkpointed to R2) ──────────────────────────
@@ -171,6 +171,9 @@ async function handleClipJob(job: Job): Promise<void> {
       where: { id: clipJobId },
       data: { progress: CLIP_STAGE_PROGRESS.TRANSCRIBING },
     })
+    timings.transcribeMs = Date.now() - mark
+    mark = Date.now()
+    console.log(`[timing] transcribe ${(timings.transcribeMs / 1000).toFixed(1)}s`)
     if (await isCanceled(clipJobId)) return
 
     // ── STAGE 3: analyze (LLM picks ranges) ───────────────────────────────
@@ -183,6 +186,9 @@ async function handleClipJob(job: Job): Promise<void> {
       where: { id: clipJobId },
       data: { progress: CLIP_STAGE_PROGRESS.ANALYZING },
     })
+    timings.analyzeMs = Date.now() - mark
+    mark = Date.now()
+    console.log(`[timing] analyze ${(timings.analyzeMs / 1000).toFixed(1)}s`)
     if (await isCanceled(clipJobId)) return
 
     // ── STAGE 4: cut (+ thumbnails) → upload to R2 → write Clip rows ───────
@@ -190,9 +196,9 @@ async function handleClipJob(job: Job): Promise<void> {
       where: { id: clipJobId },
       data: { status: 'CUTTING', currentStage: 'Cutting clips' },
     })
-    const results = await cut(source, ranges, transcript, clipsDir, reportCut)
-
-    for (const result of results) {
+    /* Stream each clip the moment it's cut: upload → persist the row → bump
+     * progress, so the UI shows clips as they land (time-to-first-clip). */
+    const onClip = async (result: ClipResult, done: number, total: number): Promise<void> => {
       const r2Key = storageKeys.clipKey(organizationId, clipJobId, result.index)
       await putObject(r2Key, await readFile(result.path), 'video/mp4')
 
@@ -218,12 +224,28 @@ async function handleClipJob(job: Job): Promise<void> {
           durationSec: result.range.end - result.range.start,
         },
       })
+
+      await prisma.clipJob.update({
+        where: { id: clipJobId },
+        data: {
+          progress: 70 + Math.round((done / Math.max(1, total)) * 30),
+          currentStage: `Cutting clip ${done} of ${total}`,
+          clipCount: done,
+        },
+      })
     }
+
+    const results = await cut(source, ranges, transcript, clipsDir, onClip)
 
     // Retention: drop the uploaded source now that clips exist (keep clips only).
     if (jobRow.sourceType === 'UPLOAD' && jobRow.uploadKey) {
       await deleteObject(jobRow.uploadKey).catch(() => {})
     }
+
+    timings.cutMs = Date.now() - mark
+    timings.clips = results.length
+    timings.totalMs = Date.now() - startedAt
+    console.log(JSON.stringify({ logger: 'clip-timing', clipJobId, ...timings }))
 
     await prisma.clipJob.update({
       where: { id: clipJobId },
@@ -234,6 +256,9 @@ async function handleClipJob(job: Job): Promise<void> {
         clipCount: results.length,
         completedAt: new Date(),
         error: null,
+        /* Documented Prisma Json boundary cast (same pattern as audit metadata
+         * in protected.ts) — ClipJobTimings is JSON-safe by construction. */
+        timings: timings as Prisma.InputJsonValue,
       },
     })
   } catch (err) {

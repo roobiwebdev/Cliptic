@@ -16,7 +16,26 @@
  * WHERE: Used by the media-pipeline lib + stages.
  */
 
-import { spawn } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
+
+const commandExistsCache = new Map<string, boolean>()
+
+/**
+ * Whether a binary is on PATH (cached). Used to auto-pick aria2c when present.
+ */
+export function commandExists(cmd: string): boolean {
+  const cached = commandExistsCache.get(cmd)
+  if (cached !== undefined) return cached
+  let ok = false
+  try {
+    const result = spawnSync(cmd, ['--version'], { stdio: 'ignore' })
+    ok = result.error === undefined
+  } catch {
+    ok = false
+  }
+  commandExistsCache.set(cmd, ok)
+  return ok
+}
 
 function friendly(cmd: string, err: NodeJS.ErrnoException): Error {
   if (err.code === 'ENOENT') {
