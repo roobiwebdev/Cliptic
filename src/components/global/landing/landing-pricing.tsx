@@ -78,9 +78,14 @@ function registryBullets(plan: PlanKey): string[] {
 export function LandingPricing() {
   return (
     <section id="pricing" className="relative mx-auto max-w-6xl scroll-mt-24 overflow-hidden px-4 py-24">
-      {/* Giant gradient display word — cards overlap its lower edge. */}
+      {/* Giant gradient display word — cards overlap its lower edge; a vertical
+          fade mask dissolves the descenders into the canvas (no hard cut-off). */}
       <h2
         aria-hidden="true"
+        style={{
+          WebkitMaskImage: 'linear-gradient(to bottom, black 42%, transparent 88%)',
+          maskImage: 'linear-gradient(to bottom, black 42%, transparent 88%)',
+        }}
         className="text-gradient pointer-events-none select-none text-center text-[26vw] leading-[0.78] font-bold tracking-tighter lg:text-[14rem]"
       >
         Pricing
