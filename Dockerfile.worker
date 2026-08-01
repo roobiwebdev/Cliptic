@@ -28,7 +28,11 @@ RUN pnpm install --frozen-lockfile
 
 # App source + generated Prisma client.
 COPY . .
-RUN pnpm prisma generate
+# prisma.config.ts requires DATABASE_URL via env(); `prisma generate` never
+# connects (it only reads the schema), so we pass a throwaway URL to satisfy
+# that check at build time. The REAL DATABASE_URL is injected at runtime by the
+# host (Railway) and takes precedence.
+RUN DATABASE_URL="postgresql://build:build@localhost:5432/build?schema=public" pnpm prisma generate
 
 # The `worker` script sets NODE_OPTIONS=--conditions=react-server so the
 # `server-only` guard is a no-op in this plain Node process.
