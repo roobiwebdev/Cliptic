@@ -21,7 +21,7 @@ import { createHash } from 'node:crypto'
 import { mediaConfig } from '../config'
 import { capture, runWithProgress, commandExists } from '../lib/exec'
 import { createLogger } from '../lib/log'
-import { extractAudio16kMono } from '../lib/media'
+import { extractAudioForTranscription } from '../lib/media'
 import type { Source } from '../types'
 
 const log = createLogger('source')
@@ -83,7 +83,7 @@ async function resolveYoutube(params: ResolveSourceParams): Promise<Source> {
 
   const maxHeight = mediaConfig.download.maxHeight
   const videoPath = path.join(scratchDir, 'source.mp4')
-  const wav = path.join(scratchDir, 'audio.wav')
+  const audioPath = path.join(scratchDir, 'audio.mp3')
 
   log(`downloading source once (≤${maxHeight}p): ${url}`)
   await runWithProgress(
@@ -105,10 +105,10 @@ async function resolveYoutube(params: ResolveSourceParams): Promise<Source> {
   )
 
   log('extracting audio for transcription')
-  await extractAudio16kMono(videoPath, wav)
+  await extractAudioForTranscription(videoPath, audioPath)
 
   /* isLocal: true — the cut stage encodes clips straight from this local mp4. */
-  return { videoId, sourceType: 'youtube', isLocal: true, videoSource: videoPath, audioPath: wav, scratchDir }
+  return { videoId, sourceType: 'youtube', isLocal: true, videoSource: videoPath, audioPath, scratchDir }
 }
 
 /** Uploaded file (already local on the worker): extract audio, cut from it directly. */
@@ -118,12 +118,12 @@ async function resolveUpload(params: ResolveSourceParams): Promise<Source> {
 
   const videoId =
     params.videoId ?? 'upload-' + createHash('sha256').update(localPath).digest('hex').slice(0, 10)
-  const wav = path.join(scratchDir, 'audio.wav')
+  const audioPath = path.join(scratchDir, 'audio.mp3')
 
   log(`extracting audio from uploaded file: ${localPath}`)
-  await extractAudio16kMono(localPath, wav)
+  await extractAudioForTranscription(localPath, audioPath)
 
-  return { videoId, sourceType: 'upload', isLocal: true, videoSource: localPath, audioPath: wav, scratchDir }
+  return { videoId, sourceType: 'upload', isLocal: true, videoSource: localPath, audioPath, scratchDir }
 }
 
 /** Resolve any input into a Source. */
