@@ -98,6 +98,13 @@ export interface MediaConfig {
     downloader: 'auto' | 'aria2c' | 'native'
     /** Optional yt-dlp player_client override (e.g. 'tv,ios') to dodge throttled formats. */
     playerClient: string | undefined
+    /** Raw Netscape cookies.txt contents (YTDLP_COOKIES). Written to a temp file
+     *  and passed as --cookies. The reliable fix for datacenter-IP bot-blocking
+     *  / HTTP 429 (YouTube trusts a signed-in session). Undefined = no cookies. */
+    cookies: string | undefined
+    /** Optional outbound proxy (YTDLP_PROXY) e.g. a residential proxy URL. The
+     *  guaranteed fix when YouTube hard-blocks the host IP. Undefined = direct. */
+    proxy: string | undefined
     /** Cap source resolution to keep the single download small (720 default). */
     maxHeight: number
   }
@@ -151,6 +158,8 @@ export const mediaConfig: MediaConfig = {
       env['YTDLP_PLAYER_CLIENT'] && env['YTDLP_PLAYER_CLIENT'].trim() !== ''
         ? env['YTDLP_PLAYER_CLIENT'].trim()
         : undefined,
+    cookies: env['YTDLP_COOKIES'] && env['YTDLP_COOKIES'].trim() !== '' ? env['YTDLP_COOKIES'] : undefined,
+    proxy: env['YTDLP_PROXY'] && env['YTDLP_PROXY'].trim() !== '' ? env['YTDLP_PROXY'].trim() : undefined,
     maxHeight: num(env['CLIP_SOURCE_MAX_HEIGHT'], 720, 'CLIP_SOURCE_MAX_HEIGHT'),
   },
   encode: {
