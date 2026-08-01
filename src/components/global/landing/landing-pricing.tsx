@@ -77,19 +77,19 @@ function registryBullets(plan: PlanKey): string[] {
 
 export function LandingPricing() {
   return (
-    <section id="pricing" className="relative mx-auto max-w-6xl scroll-mt-24 overflow-hidden px-4 py-24">
-      {/* Giant gradient display word — painted ABOVE the cards (z-20) so the p/g
-          descenders extend cleanly over the card tops with the glossy
-          white→silver fill, instead of being clipped by the card edges. */}
+    <section id="pricing" className="relative mx-auto max-w-6xl scroll-mt-24 overflow-hidden px-4 pt-4 pb-24">
+      {/* Giant display word — solid foreground fill dissolved by the .giant-word
+          fade mask, painted ABOVE the cards (z-20) so the p/g descenders melt
+          over the card tops. Soft drop-shadow adds depth against the cards. */}
       <h2
         aria-hidden="true"
-        className="text-gradient pointer-events-none relative z-20 select-none text-center text-[26vw] leading-[0.78] font-bold tracking-tighter lg:text-[14rem]"
+        className="giant-word text-foreground pointer-events-none relative z-20 select-none pb-10 text-center text-[17vw] font-semibold drop-shadow-[0_18px_44px_color-mix(in_srgb,var(--background)_92%,transparent)]"
       >
         Pricing
       </h2>
       <span className="sr-only">Pricing</span>
 
-      <div className="-mt-[6vw] grid gap-4 md:grid-cols-3 lg:-mt-16">
+      <div className="-mt-[8vw] grid gap-4 md:grid-cols-3 lg:-mt-24">
         {TIERS.map((plan) => {
           const ui = TIER_UI[plan]
           const popular = plan === 'pro'
