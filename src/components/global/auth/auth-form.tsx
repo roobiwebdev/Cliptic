@@ -46,6 +46,7 @@ import { Input } from '@/components/ui/input'
 import { authClient } from '@/lib/better-auth/auth-client'
 import { AUTH_ROUTES } from '@/lib/config'
 import { useDevEmailToast } from '@/hooks/use-dev-email-toast'
+import { ResendVerification } from '@/components/global/auth/resend-verification'
 import {
   signInSchema,
   signUpSchema,
@@ -238,6 +239,7 @@ function SignUpForm({ callbackURL }: { callbackURL: string }) {
             finish creating your account.
           </p>
         </div>
+        <ResendVerification email={submittedEmail} callbackURL={callbackURL} />
         <Link href={AUTH_ROUTES.signIn} className="text-sm underline underline-offset-4">
           Back to sign in
         </Link>
