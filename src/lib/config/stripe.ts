@@ -24,7 +24,7 @@ import Stripe from 'stripe'
 /* Pinned to the installed SDK's latest API version. In this version the
  * subscription period fields live on the subscription ITEMS
  * (items.data[0].current_period_*), not on the subscription itself. */
-export const STRIPE_API_VERSION = '2026-06-24.dahlia' as const
+export const STRIPE_API_VERSION = '2026-07-29.dahlia' as const
 
 let client: Stripe | null = null
 

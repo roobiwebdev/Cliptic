@@ -22,6 +22,7 @@ import {
   CreditCard,
   Folder,
   LayoutDashboard,
+  Scissors,
   ScrollText,
   Settings,
   Users,
@@ -37,6 +38,7 @@ export const NAV_ICONS: Record<string, LucideIcon> = {
   CreditCard,
   Settings,
   LayoutDashboard,
+  Scissors,
 }
 
 export type NavIconName = keyof typeof NAV_ICONS

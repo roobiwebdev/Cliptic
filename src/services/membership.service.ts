@@ -17,6 +17,7 @@
  *        and anywhere the active-org lookup needs the full membership list.
  */
 
+import 'server-only'
 import { cache } from 'react'
 import { prisma } from '@/lib/config'
 
