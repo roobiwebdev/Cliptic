@@ -56,20 +56,26 @@ function snapRange(range: ClipRange, transcript?: Transcript): { start: number; 
   return end - start > 1 ? { start, end } : { start: range.start, end: range.end }
 }
 
-/** Re-encode a precise [inPoint, outPoint] slice of `input` into `output`. */
+/**
+ * Re-encode a precise [inPoint, outPoint] slice of `input` into `output`.
+ * `-ss` BEFORE `-i` is an INPUT seek — fast even deep into a long local file
+ * (seeks to the nearest keyframe, then re-encodes frame-accurately from there).
+ * `-t duration` bounds the segment. Frame-accurate + fast; preset is tunable.
+ */
 async function encodeClip(input: string, inPoint: number, outPoint: number, output: string): Promise<void> {
+  const duration = Math.max(0.1, outPoint - inPoint)
   await run('ffmpeg', [
     '-y',
-    '-i',
-    input,
     '-ss',
     inPoint.toFixed(3),
-    '-to',
-    outPoint.toFixed(3),
+    '-i',
+    input,
+    '-t',
+    duration.toFixed(3),
     '-c:v',
     'libx264',
     '-preset',
-    'veryfast',
+    mediaConfig.encode.preset,
     '-crf',
     '20',
     '-c:a',
