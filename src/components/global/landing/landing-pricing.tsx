@@ -8,105 +8,124 @@
 /**
  * SOURCE OF TRUTH KEYWORDS: LandingPricing
  *
- * WHAT:  Landing pricing grid — one card per purchasable plan, with the monthly
- *        video quota + length/concurrency caps pulled from the SAME registry the
- *        app enforces (RESOURCES.clips + clip-limits), so marketing never drifts
- *        from reality.
- * WHY:   Display prices are indicative (real billing is Polar, Phase 6); the
- *        limits are the source of truth.
+ * WHAT:  Landing pricing — a giant gradient "Pricing" word with three dark cards
+ *        overlapping its lower edge (Free / Pro=most-popular / Enterprise). Big
+ *        number + inline unit, tagline, divider, checkmark bullets, full-width
+ *        pill CTA.
+ * WHY:   Plan names come from PLANS and the quota/length/concurrency bullets from
+ *        the SAME registry the app enforces (RESOURCES.clips + clip-limits), so
+ *        marketing never drifts from reality. Prices are indicative (Polar owns
+ *        the real amounts, Phase 6).
  * WHERE: Rendered by the landing page.
  */
 
 import Link from 'next/link'
 import { Check } from 'lucide-react'
 
-import { PLANS, PLAN_ORDER, type PlanKey } from '@/lib/config'
+import { PLANS, type PlanKey } from '@/lib/config'
 import { getClipPlanLimits } from '@/lib/config/clip-limits'
 import { getResourceLimitForPlan } from '@/lib/resources'
 import { AUTH_ROUTES } from '@/lib/config'
 import { buttonVariants } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 
-/* Indicative display pricing — edit freely; real amounts are set on Polar. */
-const PRICE_DISPLAY: Record<PlanKey, { amount: string; period?: string; cta: string }> = {
-  free: { amount: 'Free', cta: 'Start free' },
-  starter: { amount: '$19', period: '/mo', cta: 'Start clipping' },
-  pro: { amount: '$49', period: '/mo', cta: 'Go Pro' },
-  enterprise: { amount: 'Custom', cta: 'Contact us' },
-  portal: { amount: '—', cta: '' },
+/* The three tiers shown, in order; the middle one is the highlighted card. */
+const TIERS = ['free', 'pro', 'enterprise'] as const satisfies readonly PlanKey[]
+
+interface TierUi {
+  price: string
+  unit?: string
+  tagline: string
+  cta: string
+  perks: string[]
 }
 
-function quotaLabel(plan: PlanKey): string {
-  const limit = getResourceLimitForPlan('clips', plan)
-  return Number.isFinite(limit) ? `${limit} videos / month` : 'Unlimited videos'
+const TIER_UI: Record<'free' | 'pro' | 'enterprise', TierUi> = {
+  free: {
+    price: '$0',
+    tagline: 'No card, no trial — free forever.',
+    cta: 'Start clipping',
+    perks: ['AI moment selection', 'Link + direct upload', 'Download every clip'],
+  },
+  pro: {
+    price: '$49',
+    unit: '/mo',
+    tagline: 'Every clip, without counting the minutes.',
+    cta: 'Go Pro',
+    perks: ['Priority processing', 'Thumbnails + AI reasons', 'Download all clips'],
+  },
+  enterprise: {
+    price: 'Custom',
+    tagline: 'For teams and high-volume creators.',
+    cta: 'Contact us',
+    perks: ['Bring your own AI keys', 'Higher concurrency limits', 'Priority support'],
+  },
 }
 
-function lengthLabel(plan: PlanKey): string {
-  const { maxVideoMinutes } = getClipPlanLimits(plan)
-  if (!Number.isFinite(maxVideoMinutes)) return 'Any video length'
-  if (maxVideoMinutes >= 60) return `Up to ${(maxVideoMinutes / 60).toFixed(0)} hr videos`
-  return `Up to ${maxVideoMinutes} min videos`
-}
-
-function planBullets(plan: PlanKey): string[] {
-  const { maxConcurrentJobs } = getClipPlanLimits(plan)
-  return [
-    quotaLabel(plan),
-    lengthLabel(plan),
-    `${maxConcurrentJobs} clip job${maxConcurrentJobs === 1 ? '' : 's'} at a time`,
-    'AI moment selection',
-    'Link + direct upload',
-  ]
+function registryBullets(plan: PlanKey): string[] {
+  const quota = getResourceLimitForPlan('clips', plan)
+  const { maxVideoMinutes, maxConcurrentJobs } = getClipPlanLimits(plan)
+  const quotaLine = Number.isFinite(quota) ? `${quota} videos every month` : 'Unlimited videos'
+  const lengthLine = !Number.isFinite(maxVideoMinutes)
+    ? 'Any video length'
+    : maxVideoMinutes >= 60
+      ? `Up to ${(maxVideoMinutes / 60).toFixed(0)} hr videos`
+      : `Up to ${maxVideoMinutes} min per video`
+  const concurrencyLine = `${maxConcurrentJobs} clip job${maxConcurrentJobs === 1 ? '' : 's'} at a time`
+  return [quotaLine, lengthLine, concurrencyLine]
 }
 
 export function LandingPricing() {
-  const plans = PLAN_ORDER.filter((plan) => PLANS[plan].showPlan)
-
   return (
-    <section id="pricing" className="mx-auto max-w-6xl scroll-mt-24 px-4 py-24">
-      <div className="text-center">
-        <span className="glass text-muted-foreground inline-block rounded-full px-3 py-1 text-xs">
-          Pricing
-        </span>
-        <h2 className="mt-4 text-3xl font-semibold tracking-tight sm:text-4xl">
-          Simple, per-workspace pricing
-        </h2>
-        <p className="text-muted-foreground mx-auto mt-3 max-w-lg text-balance">
-          Start free. Upgrade when you need more videos, longer sources, or more clips at once.
-        </p>
-      </div>
+    <section id="pricing" className="relative mx-auto max-w-6xl scroll-mt-24 overflow-hidden px-4 py-24">
+      {/* Giant gradient display word — cards overlap its lower edge. */}
+      <h2
+        aria-hidden="true"
+        className="text-gradient pointer-events-none select-none text-center text-[26vw] leading-[0.78] font-bold tracking-tighter lg:text-[14rem]"
+      >
+        Pricing
+      </h2>
+      <span className="sr-only">Pricing</span>
 
-      <div className="mt-12 grid gap-4 md:grid-cols-2 lg:grid-cols-4">
-        {plans.map((plan) => {
-          const price = PRICE_DISPLAY[plan]
+      <div className="relative z-10 -mt-[11vw] grid gap-4 md:grid-cols-3 lg:-mt-32">
+        {TIERS.map((plan) => {
+          const ui = TIER_UI[plan]
           const popular = plan === 'pro'
+          const bullets = [...registryBullets(plan), ...ui.perks]
+
           return (
             <div
               key={plan}
               className={cn(
-                'flex flex-col rounded-2xl p-6',
-                popular ? 'glass-strong glow-primary ring-1 ring-foreground/15' : 'glass'
+                'relative flex flex-col rounded-3xl p-6 sm:p-8',
+                popular
+                  ? 'glass-strong glow-primary ring-1 ring-foreground/15'
+                  : 'glass'
               )}
             >
-              <div className="flex items-center justify-between">
-                <span className="text-sm font-medium">{PLANS[plan].name}</span>
-                {popular ? (
-                  <span className="bg-primary text-primary-foreground rounded-full px-2.5 py-0.5 text-xs font-medium">
-                    Most popular
-                  </span>
-                ) : null}
-              </div>
-              <div className="mt-4 flex items-baseline gap-1">
-                <span className="text-3xl font-semibold tracking-tight">{price.amount}</span>
-                {price.period ? (
-                  <span className="text-muted-foreground text-sm">{price.period}</span>
-                ) : null}
+              {popular ? (
+                <span className="bg-primary text-primary-foreground absolute -top-3 left-1/2 -translate-x-1/2 rounded-full px-3 py-1 text-xs font-medium whitespace-nowrap">
+                  Most popular
+                </span>
+              ) : null}
+
+              <span className="text-muted-foreground text-sm">{PLANS[plan].name}</span>
+
+              <div className="mt-2 flex items-baseline gap-1.5">
+                <span className="text-5xl font-semibold tracking-tight">{ui.price}</span>
+                {ui.unit ? <span className="text-muted-foreground text-lg">{ui.unit}</span> : null}
               </div>
 
-              <ul className="mt-6 flex flex-1 flex-col gap-2.5">
-                {planBullets(plan).map((bullet) => (
-                  <li key={bullet} className="text-muted-foreground flex items-start gap-2 text-sm">
-                    <Check className="text-foreground mt-0.5 size-4 shrink-0" />
+              <p className="text-muted-foreground mt-3 text-sm">{ui.tagline}</p>
+
+              <div className="border-border/60 my-7 border-t" />
+
+              <ul className="flex flex-1 flex-col gap-4">
+                {bullets.map((bullet) => (
+                  <li key={bullet} className="flex items-center gap-3 text-sm">
+                    <span className="bg-foreground/10 flex size-6 shrink-0 items-center justify-center rounded-full">
+                      <Check className="size-3.5" />
+                    </span>
                     {bullet}
                   </li>
                 ))}
@@ -115,11 +134,11 @@ export function LandingPricing() {
               <Link
                 href={AUTH_ROUTES.signUp}
                 className={cn(
-                  buttonVariants({ variant: popular ? 'default' : 'outline' }),
-                  'mt-6 w-full rounded-full'
+                  buttonVariants({ variant: popular ? 'default' : 'outline', size: 'lg' }),
+                  'mt-8 w-full rounded-full'
                 )}
               >
-                {price.cta}
+                {ui.cta}
               </Link>
             </div>
           )
