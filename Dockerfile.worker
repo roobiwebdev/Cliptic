@@ -1,28 +1,44 @@
 # Cliptic background worker image (Railway).
 # Ships ffmpeg (cut/transcode), aria2 (multi-connection downloads that beat
-# YouTube throttling), and a FRESH yt-dlp — the tools the pipeline shells out to.
+# YouTube throttling), a fresh pip yt-dlp, a Deno JS runtime, and an in-container
+# bgutil PO-token provider — the tools the pipeline shells out to, plus what it
+# takes to get past YouTube's datacenter-IP bot wall (HTTP 429).
+
+# --- Stage: the maintained bgutil PO-token provider (we copy its built server) -
+FROM brainicism/bgutil-ytdlp-pot-provider:latest AS potprovider
+
+# --- Worker ------------------------------------------------------------------
 FROM node:20-bookworm-slim
 
-# System tools the media pipeline shells out to.
+# System tools the media pipeline shells out to (+ python for pip yt-dlp).
 RUN apt-get update && apt-get install -y --no-install-recommends \
       ffmpeg \
       aria2 \
       curl \
       ca-certificates \
       python3 \
+      python3-pip \
+      python3-venv \
       unzip \
  && rm -rf /var/lib/apt/lists/*
 
-# Fresh standalone yt-dlp (the apt/system builds lag and re-introduce throttling).
-RUN curl -fsSL https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp \
-      -o /usr/local/bin/yt-dlp \
- && chmod +x /usr/local/bin/yt-dlp
+# yt-dlp via pip (REQUIRED: the bgutil PO-token plugin only loads under a
+# pip/pipx yt-dlp, not the standalone binary) + the PO-token plugin itself.
+# A venv keeps them in one importable environment (and satisfies PEP 668).
+RUN python3 -m venv /opt/ytdlp \
+ && /opt/ytdlp/bin/pip install --no-cache-dir -U yt-dlp bgutil-ytdlp-pot-provider
+ENV PATH="/opt/ytdlp/bin:${PATH}"
 
 # Deno: a JS runtime so yt-dlp can solve YouTube's JS challenges (nsig/po_token).
-# Without it yt-dlp warns "No supported JavaScript runtime" and downloads fail
-# harder against YouTube's bot checks. Installed to /usr/local/bin (on PATH).
 RUN curl -fsSL https://deno.land/install.sh | DENO_INSTALL=/usr/local sh \
  && deno --version
+
+# The bgutil PO-token HTTP provider (maintained build). Started in-container on
+# 127.0.0.1:4416 by the entrypoint so yt-dlp's plugin can fetch tokens locally.
+COPY --from=potprovider /app /opt/bgutil-provider
+# Enable the plugin ONLY inside the container (unset locally, so local dev is
+# unchanged). Points at the in-container provider.
+ENV BGUTIL_POT_BASE_URL="http://127.0.0.1:4416"
 
 RUN corepack enable && corepack prepare pnpm@10.30.3 --activate
 
@@ -41,6 +57,5 @@ COPY . .
 # host (Railway) and takes precedence.
 RUN DATABASE_URL="postgresql://build:build@localhost:5432/build?schema=public" pnpm prisma generate
 
-# The `worker` script sets NODE_OPTIONS=--conditions=react-server so the
-# `server-only` guard is a no-op in this plain Node process.
-CMD ["pnpm", "worker"]
+# Start the PO-token provider (background, 127.0.0.1:4416), then the worker.
+CMD ["bash", "scripts/worker-entrypoint.sh"]

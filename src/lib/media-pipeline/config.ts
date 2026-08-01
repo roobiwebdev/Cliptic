@@ -105,6 +105,10 @@ export interface MediaConfig {
     /** Optional outbound proxy (YTDLP_PROXY) e.g. a residential proxy URL. The
      *  guaranteed fix when YouTube hard-blocks the host IP. Undefined = direct. */
     proxy: string | undefined
+    /** bgutil PO-token provider base URL (BGUTIL_POT_BASE_URL). Set in the worker
+     *  image to the in-container provider; unset locally. When set, yt-dlp fetches
+     *  PO tokens from it (via the bgutil plugin) to pass YouTube's bot checks. */
+    potBaseUrl: string | undefined
     /** Cap source resolution to keep the single download small (720 default). */
     maxHeight: number
   }
@@ -160,6 +164,10 @@ export const mediaConfig: MediaConfig = {
         : undefined,
     cookies: env['YTDLP_COOKIES'] && env['YTDLP_COOKIES'].trim() !== '' ? env['YTDLP_COOKIES'] : undefined,
     proxy: env['YTDLP_PROXY'] && env['YTDLP_PROXY'].trim() !== '' ? env['YTDLP_PROXY'].trim() : undefined,
+    potBaseUrl:
+      env['BGUTIL_POT_BASE_URL'] && env['BGUTIL_POT_BASE_URL'].trim() !== ''
+        ? env['BGUTIL_POT_BASE_URL'].trim()
+        : undefined,
     maxHeight: num(env['CLIP_SOURCE_MAX_HEIGHT'], 720, 'CLIP_SOURCE_MAX_HEIGHT'),
   },
   encode: {
