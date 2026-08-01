@@ -5,39 +5,37 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-'use client'
-
 /**
- * SOURCE OF TRUTH KEYWORDS: RootPage
+ * SOURCE OF TRUTH KEYWORDS: LandingPage
  *
- * WHAT:  Root index — fires a single auth-required tRPC query, then sends the
- *        authenticated user on to the dashboard. Renders nothing meanwhile.
- * WHY:   The query is the auth probe: anonymous → server throws UNAUTHORIZED →
- *        the AuthRedirectObserver bounces to sign-in (auth-flow stays
- *        centralized, never a per-page `redirect`). On success the user is
- *        authenticated, so we push to ROUTES.dashboard — the dashboard layout
- *        then owns the no-org → onboarding redirect. This page never decides
- *        the auth target itself; it only forwards the happy path.
- * WHERE: Auth enforcement: authProcedure (src/trpc/procedures/protected.ts);
- *        redirect handler: AuthRedirectObserver (src/trpc/react-provider.tsx);
- *        landing route: ROUTES (src/lib/config/routes.ts).
+ * WHAT:  The public marketing landing at `/` — nav, hero, features, pricing,
+ *        FAQ, and CTA/footer in the Cliptic glass-dark aesthetic.
+ * WHY:   `/` is public (proxy.ts doesn't gate it; auth redirects live in the
+ *        dashboard layout). The nav shows a Dashboard CTA when a session exists,
+ *        otherwise Sign in / Get started.
+ * WHERE: Sections in src/components/global/landing/*; session via getCachedSession.
  */
 
-import { useEffect } from 'react'
-import { useRouter } from 'next/navigation'
+import { getCachedSession } from '@/lib/better-auth/auth'
+import { LandingNav } from '@/components/global/landing/landing-nav'
+import { LandingHero } from '@/components/global/landing/landing-hero'
+import { LandingFeatures } from '@/components/global/landing/landing-features'
+import { LandingPricing } from '@/components/global/landing/landing-pricing'
+import { LandingFaq } from '@/components/global/landing/landing-faq'
+import { LandingFooter } from '@/components/global/landing/landing-footer'
 
-import { trpc } from '@/trpc/react-provider'
-import { ROUTES } from '@/lib/config'
+export default async function LandingPage() {
+  const session = await getCachedSession()
+  const authed = Boolean(session?.user)
 
-export default function RootPage(): null {
-  const router = useRouter()
-  /* Anonymous → UNAUTHORIZED → observer → sign-in. Authenticated → resolves
-   * (org or null) and we forward to the dashboard. */
-  const { isSuccess } = trpc.organization.getActiveOrganization.useQuery()
-
-  useEffect(() => {
-    if (isSuccess) router.replace(ROUTES.dashboard)
-  }, [isSuccess, router])
-
-  return null
+  return (
+    <main className="relative min-h-svh overflow-x-hidden">
+      <LandingNav authed={authed} />
+      <LandingHero />
+      <LandingFeatures />
+      <LandingPricing />
+      <LandingFaq />
+      <LandingFooter />
+    </main>
+  )
 }
