@@ -21,10 +21,11 @@
  *        layouts, auth.ts, and the upgrade-modal UI.
  */
 
-export const APP_NAME = process.env['NEXT_PUBLIC_APP_NAME'] ?? 'My App'
+export const APP_NAME = process.env['NEXT_PUBLIC_APP_NAME'] ?? 'Cliptic'
 
 export const APP_DESCRIPTION =
-  process.env['NEXT_PUBLIC_APP_DESCRIPTION'] ?? `${APP_NAME} — multi-tenant SaaS.`
+  process.env['NEXT_PUBLIC_APP_DESCRIPTION'] ??
+  'Cliptic turns long videos into short, viral-ready clips with AI — paste a link or upload, and get the best moments back in minutes.'
 
 export const APP_URL = process.env['NEXT_PUBLIC_APP_URL'] ?? 'http://localhost:3000'
 

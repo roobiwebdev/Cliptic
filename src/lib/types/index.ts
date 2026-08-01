@@ -31,6 +31,8 @@ export {
   authSchemaFor,
   forgotPasswordSchema,
   resetPasswordSchema,
+  updateProfileSchema,
+  changePasswordSchema,
 } from './auth'
 export type {
   SignInValues,
@@ -39,6 +41,8 @@ export type {
   AuthValuesByMode,
   ForgotPasswordValues,
   ResetPasswordValues,
+  UpdateProfileValues,
+  ChangePasswordValues,
 } from './auth'
 export { createOrganizationSchema, updateOrganizationSettingsSchema } from './organization'
 export type {
