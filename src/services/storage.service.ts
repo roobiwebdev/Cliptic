@@ -70,6 +70,18 @@ function requireClient() {
   return client
 }
 
+/* Turn opaque S3 errors into actionable ones — an AccessDenied on a write almost
+ * always means the R2 API token is read-only. */
+function r2Error(operation: string, error: unknown): Error {
+  const name = error instanceof Error ? error.name : ''
+  if (name === 'AccessDenied') {
+    return new Error(
+      `R2 ${operation} was denied. Your R2 API token needs "Object Read & Write" permission on bucket "${R2_BUCKET}" — regenerate it in Cloudflare → R2 → Manage API Tokens and update R2_ACCESS_KEY_ID / R2_SECRET_ACCESS_KEY.`
+    )
+  }
+  return error instanceof Error ? error : new Error(String(error))
+}
+
 /**
  * SOURCE OF TRUTH KEYWORDS: putObject
  *
@@ -82,9 +94,13 @@ export async function putObject(
   contentType: string
 ): Promise<void> {
   const client = requireClient()
-  await client.send(
-    new PutObjectCommand({ Bucket: R2_BUCKET, Key: key, Body: body, ContentType: contentType })
-  )
+  try {
+    await client.send(
+      new PutObjectCommand({ Bucket: R2_BUCKET, Key: key, Body: body, ContentType: contentType })
+    )
+  } catch (error) {
+    throw r2Error('upload', error)
+  }
 }
 
 /**
