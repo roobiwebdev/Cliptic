@@ -132,3 +132,39 @@ export const resetPasswordSchema = z
   })
 
 export type ResetPasswordValues = z.infer<typeof resetPasswordSchema>
+
+/**
+ * SOURCE OF TRUTH KEYWORDS: updateProfileSchema, UpdateProfileValues
+ *
+ * WHAT:  Profile edit payload — display name + optional avatar URL.
+ * WHY:   The account page edits the Better Auth user (name/image); an empty
+ *        image string clears the avatar.
+ * WHERE: Used by the profile settings form.
+ */
+export const updateProfileSchema = z.object({
+  name: z.string().trim().min(1, 'Name is required.').max(120, 'Name is too long.'),
+  image: z.union([z.string().trim().url('Enter a valid image URL.'), z.literal('')]).optional(),
+})
+
+export type UpdateProfileValues = z.infer<typeof updateProfileSchema>
+
+/**
+ * SOURCE OF TRUTH KEYWORDS: changePasswordSchema, ChangePasswordValues
+ *
+ * WHAT:  Change-password payload — current + new (>= min) + confirmation.
+ * WHERE: Used by the account settings password form.
+ */
+export const changePasswordSchema = z
+  .object({
+    currentPassword: z.string().min(1, 'Enter your current password.'),
+    newPassword: z
+      .string()
+      .min(AUTH_PASSWORD_MIN_LENGTH, `At least ${AUTH_PASSWORD_MIN_LENGTH} characters.`),
+    confirmPassword: z.string().min(1, 'Please confirm your new password.'),
+  })
+  .refine((data) => data.newPassword === data.confirmPassword, {
+    message: 'Passwords do not match.',
+    path: ['confirmPassword'],
+  })
+
+export type ChangePasswordValues = z.infer<typeof changePasswordSchema>
