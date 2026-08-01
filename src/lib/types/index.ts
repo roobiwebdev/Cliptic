@@ -83,10 +83,12 @@ export {
   listClipJobsSchema,
   createUploadUrlSchema,
   CLIP_STAGE_PROGRESS,
+  parseClipJobTimings,
 } from './clips'
 export type {
   ClipJobPayload,
   CreateClipJobValues,
   ListClipJobsValues,
   CreateUploadUrlValues,
+  ClipJobTimings,
 } from './clips'
