@@ -6,18 +6,20 @@
  */
 
 /**
- * SOURCE OF TRUTH KEYWORDS: cut, snapToWordGap, encodeClip, downloadSection
+ * SOURCE OF TRUTH KEYWORDS: cut, OnClipReady, snapToWordGap, encodeClip
  *
- * WHAT:  STAGE 4 — turn chosen ranges into clip files with FFmpeg, plus a poster
- *        thumbnail per clip. For YouTube we fetch ONLY each padded section
- *        (yt-dlp --download-sections); uploads cut directly from the local file.
+ * WHAT:  STAGE 4 — turn chosen ranges into clip files (+ poster thumbnails),
+ *        cutting from the already-downloaded LOCAL source, in PARALLEL, and
+ *        invoking `onClip` the moment each clip is ready so the worker can
+ *        upload + persist it immediately (time-to-first-clip / streaming).
  * WHY:   Boundaries snap to word gaps (silence between words) so clips don't
- *        start/end mid-word. Clips are re-encoded (frame-accurate, caption-ready
- *        later). Output lands in `outDir` on scratch; the worker uploads to R2.
+ *        start/end mid-word. Clips are re-encoded frame-accurately (caption-
+ *        ready); speed comes from input-seek + bounded concurrency, not from
+ *        stream-copy (which would misalign cuts). No per-clip network fetch.
  * WHERE: Called by the clip worker processor.
  */
 import path from 'node:path'
-import { rm, stat } from 'node:fs/promises'
+import { stat } from 'node:fs/promises'
 import { run } from '../lib/exec'
 import { createLogger } from '../lib/log'
 import { generateThumbnail } from '../lib/media'
@@ -27,6 +29,14 @@ import type { Source, ClipRange, ClipResult, Transcript, Word } from '../types'
 const log = createLogger('cut')
 
 const SNAP_WINDOW_SEC = 0.7 // search this far around a boundary for a word gap
+
+/**
+ * SOURCE OF TRUTH KEYWORDS: OnClipReady
+ *
+ * WHAT:  Called with each clip the instant it finishes cutting, plus the running
+ *        done/total counts — so the worker streams clips to the UI as they land.
+ */
+export type OnClipReady = (result: ClipResult, done: number, total: number) => Promise<void>
 
 /** Move `t` to the nearest mid-point of a word gap within the window, if any. */
 function snapToWordGap(t: number, words: Word[]): number {
@@ -38,7 +48,7 @@ function snapToWordGap(t: number, words: Word[]): number {
     if (!current || !next) continue
     const gapStart = current.end
     const gapEnd = next.start
-    if (gapEnd <= gapStart) continue
+    if (gapEnd <= gapStart) continue // no gap (or overlapping timestamps)
     const mid = (gapStart + gapEnd) / 2
     const dist = Math.abs(mid - t)
     if (dist <= SNAP_WINDOW_SEC && dist < bestDist) {
@@ -88,79 +98,76 @@ async function encodeClip(input: string, inPoint: number, outPoint: number, outp
   ])
 }
 
-/** Download only the padded [start, end] section of a YouTube video to `output`. */
-async function downloadSection(url: string, start: number, end: number, output: string): Promise<void> {
-  await run('yt-dlp', [
-    '-f',
-    'bv*[ext=mp4]+ba[ext=m4a]/b[ext=mp4]/b',
-    '--download-sections',
-    `*${start.toFixed(2)}-${end.toFixed(2)}`,
-    '--force-keyframes-at-cuts',
-    '--merge-output-format',
-    'mp4',
-    '-o',
-    output,
-    url,
-  ])
+/** Cut + thumbnail one clip from the local source. */
+async function encodeOneClip(
+  source: Source,
+  range: ClipRange,
+  index: number,
+  outDir: string,
+  transcript: Transcript | undefined
+): Promise<ClipResult> {
+  const { start, end } = snapRange(range, transcript)
+  const padded = String(index).padStart(2, '0')
+  const clipPath = path.join(outDir, `clip_${padded}.mp4`)
+
+  await encodeClip(source.videoSource, start, end, clipPath)
+
+  // Poster thumbnail — best-effort; a failure here must not fail the clip.
+  let thumbnailPath: string | undefined
+  const thumbCandidate = path.join(outDir, `clip_${padded}.jpg`)
+  try {
+    await generateThumbnail(clipPath, thumbCandidate, Math.min(1, (end - start) / 2))
+    thumbnailPath = thumbCandidate
+  } catch (err) {
+    log(`thumbnail failed for clip ${index} (non-fatal): ${err instanceof Error ? err.message : String(err)}`)
+  }
+
+  const { size } = await stat(clipPath)
+  return {
+    index,
+    path: clipPath,
+    ...(thumbnailPath ? { thumbnailPath } : {}),
+    sizeBytes: size,
+    range: { ...range, start, end },
+  }
 }
 
 /**
- * Cut all ranges into clip files (+ thumbnails) under `outDir`.
- * Returns local ClipResults; the worker uploads them to R2 and writes rows.
+ * Cut all ranges into clip files under `outDir`, `concurrency` at a time.
+ * `onClip` fires per finished clip (best-first order preserved) so the worker
+ * uploads + persists it immediately. Returns all results.
  */
 export async function cut(
   source: Source,
   ranges: ClipRange[],
   transcript: Transcript | undefined,
   outDir: string,
-  onProgress?: (done: number, total: number) => void
+  onClip?: OnClipReady
 ): Promise<ClipResult[]> {
-  const duration = transcript?.duration
-  const pad = mediaConfig.sectionPaddingSec
-  const results: ClipResult[] = []
+  const total = ranges.length
+  const concurrency = Math.max(1, Math.min(mediaConfig.cut.concurrency, total))
+  const results: Array<ClipResult | undefined> = new Array(total)
+  let nextIndex = 0
+  let completed = 0
 
-  for (let i = 0; i < ranges.length; i++) {
-    const range = ranges[i]
-    if (!range) continue
-    const index = i + 1
-    const { start, end } = snapRange(range, transcript)
-    const clipPath = path.join(outDir, `clip_${String(index).padStart(2, '0')}.mp4`)
-
-    if (source.isLocal) {
-      log(`clip ${index}/${ranges.length} [${start.toFixed(1)}-${end.toFixed(1)}s] (local)`)
-      await encodeClip(source.videoSource, start, end, clipPath)
-    } else {
-      const secStart = Math.max(0, start - pad)
-      const secEnd = duration ? Math.min(duration, end + pad) : end + pad
-      const sectionPath = path.join(outDir, `.section_${String(index).padStart(2, '0')}.mp4`)
-      log(`clip ${index}/${ranges.length} [${start.toFixed(1)}-${end.toFixed(1)}s] — fetching section`)
-      await downloadSection(source.videoSource, secStart, secEnd, sectionPath)
-      await encodeClip(sectionPath, start - secStart, end - secStart, clipPath)
-      await rm(sectionPath, { force: true })
+  async function pump(): Promise<void> {
+    for (;;) {
+      const i = nextIndex
+      nextIndex += 1
+      if (i >= total) return
+      const range = ranges[i]
+      if (!range) continue
+      const result = await encodeOneClip(source, range, i + 1, outDir, transcript)
+      results[i] = result
+      completed += 1
+      log(`clip ${completed}/${total} ready`)
+      if (onClip) await onClip(result, completed, total)
     }
-
-    // Poster thumbnail — best-effort; a failure here must not fail the clip.
-    let thumbnailPath: string | undefined
-    const thumbCandidate = path.join(outDir, `clip_${String(index).padStart(2, '0')}.jpg`)
-    try {
-      const clipLen = end - start
-      await generateThumbnail(clipPath, thumbCandidate, Math.min(1, clipLen / 2))
-      thumbnailPath = thumbCandidate
-    } catch (err) {
-      log(`thumbnail failed for clip ${index} (non-fatal): ${err instanceof Error ? err.message : String(err)}`)
-    }
-
-    const { size } = await stat(clipPath)
-    results.push({
-      index,
-      path: clipPath,
-      ...(thumbnailPath ? { thumbnailPath } : {}),
-      sizeBytes: size,
-      range: { ...range, start, end },
-    })
-    onProgress?.(index, ranges.length)
   }
 
-  log(`done: ${results.length} clips in ${outDir}`)
-  return results
+  await Promise.all(Array.from({ length: concurrency }, () => pump()))
+
+  const finished = results.filter((r): r is ClipResult => r !== undefined)
+  log(`done: ${finished.length} clips in ${outDir} (concurrency ${concurrency})`)
+  return finished
 }

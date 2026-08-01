@@ -21,6 +21,7 @@
  *        entry (src/worker/index.ts) loads .env before this module is imported.
  */
 
+import os from 'node:os'
 import { z } from 'zod'
 
 const env = process.env
@@ -104,6 +105,10 @@ export interface MediaConfig {
     /** libx264 preset for clip encoding (veryfast default; ultrafast = fastest). */
     preset: string
   }
+  cut: {
+    /** How many clips to encode concurrently (bounded by CPU on small hosts). */
+    concurrency: number
+  }
 }
 
 export const mediaConfig: MediaConfig = {
@@ -146,6 +151,9 @@ export const mediaConfig: MediaConfig = {
   },
   encode: {
     preset: env['CLIP_ENCODE_PRESET'] ?? 'veryfast',
+  },
+  cut: {
+    concurrency: num(env['CLIP_CUT_CONCURRENCY'], Math.min(os.cpus().length, 4), 'CLIP_CUT_CONCURRENCY'),
   },
 }
 
