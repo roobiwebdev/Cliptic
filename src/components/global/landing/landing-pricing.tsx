@@ -87,7 +87,7 @@ export function LandingPricing() {
       </h2>
       <span className="sr-only">Pricing</span>
 
-      <div className="relative z-10 -mt-[11vw] grid gap-4 md:grid-cols-3 lg:-mt-32">
+      <div className="relative z-10 -mt-[2vw] grid gap-4 md:grid-cols-3 lg:-mt-6">
         {TIERS.map((plan) => {
           const ui = TIER_UI[plan]
           const popular = plan === 'pro'
