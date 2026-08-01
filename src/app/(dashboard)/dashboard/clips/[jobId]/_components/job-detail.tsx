@@ -40,6 +40,7 @@ import {
 import { trpc } from '@/trpc/react-provider'
 import { useActiveOrganizationId } from '@/hooks/use-active-organization'
 import { cn } from '@/lib/utils'
+import { parseClipJobTimings } from '@/lib/types'
 import { Button, buttonVariants } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -71,6 +72,14 @@ function stageCeiling(status: string): number {
     default:
       return 100
   }
+}
+
+/* Compact ms → "40s" / "2m 14s" for the completed-job timing summary. */
+function formatDurationMs(ms: number | undefined): string {
+  if (!ms || ms < 0) return '—'
+  const secs = Math.round(ms / 1000)
+  if (secs < 60) return `${secs}s`
+  return `${Math.floor(secs / 60)}m ${secs % 60}s`
 }
 
 /* Rotating flavour lines per stage — keeps the panel feeling alive during the
@@ -329,6 +338,24 @@ export function JobDetail({ jobId }: { jobId: string }) {
           <AlertDescription>This job was canceled before it finished.</AlertDescription>
         </Alert>
       ) : null}
+
+      {job.status === 'COMPLETED'
+        ? (() => {
+            const t = parseClipJobTimings(job.timings)
+            if (!t) return null
+            return (
+              <div className="text-muted-foreground flex flex-wrap items-center gap-x-4 gap-y-1 text-xs">
+                {t.totalMs ? (
+                  <span className="text-foreground font-medium">Done in {formatDurationMs(t.totalMs)}</span>
+                ) : null}
+                {t.downloadMs ? <span>Download {formatDurationMs(t.downloadMs)}</span> : null}
+                {t.transcribeMs ? <span>Transcribe {formatDurationMs(t.transcribeMs)}</span> : null}
+                {t.analyzeMs ? <span>Analyze {formatDurationMs(t.analyzeMs)}</span> : null}
+                {t.cutMs ? <span>Cut {formatDurationMs(t.cutMs)}</span> : null}
+              </div>
+            )
+          })()
+        : null}
 
       {job.clips.length > 0 ? (
         <div className="grid gap-4 sm:grid-cols-2">

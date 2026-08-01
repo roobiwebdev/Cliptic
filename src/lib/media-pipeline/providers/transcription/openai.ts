@@ -22,12 +22,12 @@ import { run } from '../../lib/exec'
 import { createLogger } from '../../lib/log'
 import { probeDuration } from '../../lib/media'
 import { detectSilences, type Silence } from '../../lib/silence'
+import { mapWithConcurrency } from '../../lib/concurrency'
 import type { Transcriber } from './types'
 import type { Transcript, Word, TranscriptSegment } from '../../types'
 
 const log = createLogger('transcribe:openai')
 
-const BYTES_PER_SEC = 16000 * 2 // 16 kHz mono s16le WAV
 const SNAP_WINDOW_SEC = 30 // search this far around a boundary for silence
 
 interface ChunkResult {
@@ -55,32 +55,47 @@ export class OpenAITranscriber implements Transcriber {
       return this.assemble([chunk], duration)
     }
 
-    const maxChunkSec = maxBytes / BYTES_PER_SEC
+    /* Bytes-per-second from the ACTUAL file (codec-agnostic) so chunk sizing is
+     * correct whether the audio is WAV or compressed mp3. */
+    const bytesPerSec = size / Math.max(1, duration)
+    const maxChunkSec = maxBytes / bytesPerSec
     const targetChunkSec = Math.max(SNAP_WINDOW_SEC * 2, maxChunkSec - SNAP_WINDOW_SEC - 5)
 
     log(
-      `audio is ${(size / 1024 / 1024).toFixed(1)} MB — splitting on silence (~${Math.round(targetChunkSec)}s chunks)`
+      `audio is ${(size / 1024 / 1024).toFixed(1)} MB — splitting on silence (~${Math.round(targetChunkSec)}s chunks), ${mediaConfig.transcribe.concurrency} concurrent`
     )
     const ranges = await this.planChunks(audioPath, duration, targetChunkSec)
     const chunkDir = path.join(path.dirname(audioPath), 'chunks')
     await mkdir(chunkDir, { recursive: true })
+    /* Chunk container must match the input codec so `-c copy` stays valid. */
+    const ext = path.extname(audioPath) || '.mp3'
 
-    const chunks: ChunkResult[] = []
     try {
-      for (let i = 0; i < ranges.length; i++) {
-        const range = ranges[i]
-        if (!range) continue
-        const { start, end } = range
-        const chunkPath = path.join(chunkDir, `chunk-${i}.wav`)
-        await run('ffmpeg', ['-y', '-i', audioPath, '-ss', String(start), '-to', String(end), '-c', 'copy', chunkPath])
-        log(`chunk ${i + 1}/${ranges.length} [${start.toFixed(1)}–${end.toFixed(1)}s]`)
-        chunks.push(await this.transcribeFile(client, chunkPath, start))
-      }
+      const chunks = await mapWithConcurrency(
+        ranges,
+        mediaConfig.transcribe.concurrency,
+        async (range, i) => {
+          const chunkPath = path.join(chunkDir, `chunk-${i}${ext}`)
+          await run('ffmpeg', [
+            '-y',
+            '-i',
+            audioPath,
+            '-ss',
+            String(range.start),
+            '-to',
+            String(range.end),
+            '-c',
+            'copy',
+            chunkPath,
+          ])
+          log(`chunk ${i + 1}/${ranges.length} [${range.start.toFixed(1)}–${range.end.toFixed(1)}s]`)
+          return this.transcribeFile(client, chunkPath, range.start)
+        }
+      )
+      return this.assemble(chunks, duration)
     } finally {
       await rm(chunkDir, { recursive: true, force: true })
     }
-
-    return this.assemble(chunks, duration)
   }
 
   /** Transcribe one file and shift its timestamps by `offset` seconds. */
