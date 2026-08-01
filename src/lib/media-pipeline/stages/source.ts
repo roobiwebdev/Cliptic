@@ -16,6 +16,8 @@
  *        state (DB) and the scratch dir, which fixes the CLI's cache-key bug.
  * WHERE: Called by the clip worker processor.
  */
+import fs from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
 import { createHash } from 'node:crypto'
 import { mediaConfig } from '../config'
@@ -25,6 +27,31 @@ import { extractAudioForTranscription } from '../lib/media'
 import type { Source } from '../types'
 
 const log = createLogger('source')
+
+/**
+ * Auth args applied to EVERY yt-dlp call (id-probe + download): cookies and/or
+ * proxy. Cookies (a signed-in session) and a residential proxy are the two
+ * levers that beat YouTube's datacenter-IP bot-blocking / HTTP 429 — the reason
+ * a link that downloads fine locally fails from a cloud host. The cookies file
+ * is written once from YTDLP_COOKIES and reused (memoised) across jobs.
+ */
+let cookiesPath: string | undefined | null = null
+function ytdlpAuthArgs(): string[] {
+  if (cookiesPath === null) {
+    const raw = mediaConfig.download.cookies
+    if (raw) {
+      const filePath = path.join(os.tmpdir(), 'cliptic-yt-cookies.txt')
+      fs.writeFileSync(filePath, raw.endsWith('\n') ? raw : raw + '\n', { mode: 0o600 })
+      cookiesPath = filePath
+    } else {
+      cookiesPath = undefined
+    }
+  }
+  const args: string[] = []
+  if (cookiesPath) args.push('--cookies', cookiesPath)
+  if (mediaConfig.download.proxy) args.push('--proxy', mediaConfig.download.proxy)
+  return args
+}
 
 export interface ResolveSourceParams {
   sourceType: 'youtube' | 'upload'
@@ -56,6 +83,7 @@ function ytdlpNetworkArgs(): string[] {
     '10',
     '--concurrent-fragments',
     '4',
+    ...ytdlpAuthArgs(),
   ]
   const useAria = downloader === 'aria2c' || (downloader === 'auto' && commandExists('aria2c'))
   if (useAria) {
@@ -78,7 +106,8 @@ async function resolveYoutube(params: ResolveSourceParams): Promise<Source> {
   if (!url) throw new Error('resolveSource: YouTube source requires a url.')
 
   const bin = mediaConfig.download.ytdlpBin
-  const videoId = params.videoId ?? (await capture(bin, ['--print', 'id', '--no-download', url]))
+  const videoId =
+    params.videoId ?? (await capture(bin, ['--print', 'id', '--no-download', ...ytdlpAuthArgs(), url]))
   if (!videoId) throw new Error(`Could not resolve a video id for: ${url}`)
 
   const maxHeight = mediaConfig.download.maxHeight

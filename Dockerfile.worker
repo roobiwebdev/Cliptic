@@ -10,12 +10,19 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       curl \
       ca-certificates \
       python3 \
+      unzip \
  && rm -rf /var/lib/apt/lists/*
 
 # Fresh standalone yt-dlp (the apt/system builds lag and re-introduce throttling).
 RUN curl -fsSL https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp \
       -o /usr/local/bin/yt-dlp \
  && chmod +x /usr/local/bin/yt-dlp
+
+# Deno: a JS runtime so yt-dlp can solve YouTube's JS challenges (nsig/po_token).
+# Without it yt-dlp warns "No supported JavaScript runtime" and downloads fail
+# harder against YouTube's bot checks. Installed to /usr/local/bin (on PATH).
+RUN curl -fsSL https://deno.land/install.sh | DENO_INSTALL=/usr/local sh \
+ && deno --version
 
 RUN corepack enable && corepack prepare pnpm@10.30.3 --activate
 
