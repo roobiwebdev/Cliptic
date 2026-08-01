@@ -109,6 +109,10 @@ export interface MediaConfig {
     /** How many clips to encode concurrently (bounded by CPU on small hosts). */
     concurrency: number
   }
+  transcribe: {
+    /** Concurrent Whisper requests for long (chunked) audio. */
+    concurrency: number
+  }
 }
 
 export const mediaConfig: MediaConfig = {
@@ -154,6 +158,9 @@ export const mediaConfig: MediaConfig = {
   },
   cut: {
     concurrency: num(env['CLIP_CUT_CONCURRENCY'], Math.min(os.cpus().length, 4), 'CLIP_CUT_CONCURRENCY'),
+  },
+  transcribe: {
+    concurrency: num(env['TRANSCRIBE_CONCURRENCY'], 4, 'TRANSCRIBE_CONCURRENCY'),
   },
 }
 

@@ -53,6 +53,28 @@ export async function extractAudio16kMono(inputPath: string, outPath: string): P
 }
 
 /**
+ * Extract a COMPACT mono audio file (16 kHz mp3, low bitrate) for transcription.
+ * Far smaller than PCM WAV — usually under Whisper's 25 MB cap so no chunking is
+ * needed — while keeping the speech fidelity Whisper actually uses (it downsamples
+ * to 16 kHz internally anyway). Word timestamps are unaffected by the codec.
+ */
+export async function extractAudioForTranscription(inputPath: string, outPath: string): Promise<void> {
+  await run('ffmpeg', [
+    '-y',
+    '-i',
+    inputPath,
+    '-vn',
+    '-ac',
+    '1',
+    '-ar',
+    '16000',
+    '-b:a',
+    '32k',
+    outPath,
+  ])
+}
+
+/**
  * Grab a single poster frame from a clip (a moment in, so it isn't a black
  * intro frame), scaled to a reasonable thumbnail width. Best-effort: never
  * throws in a way that should fail the whole job (the caller decides).
