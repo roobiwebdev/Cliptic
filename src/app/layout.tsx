@@ -51,11 +51,36 @@ const geistMono = Geist_Mono({
 
 export const metadata: Metadata = {
   metadataBase: BRANDING.metadataBase,
+  applicationName: BRANDING.appName,
   title: {
-    default: BRANDING.appName,
+    default: `${BRANDING.appName} — Long videos in, viral clips out`,
     template: `%s — ${BRANDING.appName}`,
   },
   description: BRANDING.appDescription,
+  keywords: [
+    'AI video clipping',
+    'viral clips',
+    'short-form video',
+    'podcast clips',
+    'video to shorts',
+    'TikTok clips',
+    'Reels',
+    'YouTube Shorts',
+    BRANDING.appName,
+  ],
+  authors: [{ name: BRANDING.appName }],
+  openGraph: {
+    type: 'website',
+    siteName: BRANDING.appName,
+    title: `${BRANDING.appName} — Long videos in, viral clips out`,
+    description: BRANDING.appDescription,
+    url: BRANDING.appUrl,
+  },
+  twitter: {
+    card: 'summary_large_image',
+    title: `${BRANDING.appName} — Long videos in, viral clips out`,
+    description: BRANDING.appDescription,
+  },
 }
 
 export default function RootLayout({
@@ -72,7 +97,7 @@ export default function RootLayout({
       <body className="min-h-full flex flex-col antialiased" suppressHydrationWarning>
         <ThemeProvider
           attribute="class"
-          forcedTheme="dark"
+          defaultTheme="dark"
           enableSystem={false}
           disableTransitionOnChange
         >
