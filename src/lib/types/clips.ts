@@ -105,3 +105,43 @@ export const createUploadUrlSchema = z.object({
 
 export type ListClipJobsValues = z.infer<typeof listClipJobsSchema>
 export type CreateUploadUrlValues = z.infer<typeof createUploadUrlSchema>
+
+/**
+ * SOURCE OF TRUTH KEYWORDS: ClipJobTimings, parseClipJobTimings
+ *
+ * WHAT:  Per-stage wall-clock (ms) persisted on ClipJob.timings (a Json column)
+ *        for performance measurement + a safe parser for the untyped JSON value.
+ * WHY:   Prisma types Json as `JsonValue`; this parser narrows it for the UI
+ *        without an `any` cast.
+ * WHERE: Written by the worker; read by the job-detail UI.
+ */
+export interface ClipJobTimings {
+  downloadMs?: number
+  transcribeMs?: number
+  analyzeMs?: number
+  cutMs?: number
+  totalMs?: number
+  clips?: number
+  durationSec?: number
+}
+
+const CLIP_TIMING_KEYS = [
+  'downloadMs',
+  'transcribeMs',
+  'analyzeMs',
+  'cutMs',
+  'totalMs',
+  'clips',
+  'durationSec',
+] as const
+
+export function parseClipJobTimings(value: unknown): ClipJobTimings | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+  const record = value as Record<string, unknown>
+  const timings: ClipJobTimings = {}
+  for (const key of CLIP_TIMING_KEYS) {
+    const raw = record[key]
+    if (typeof raw === 'number' && Number.isFinite(raw)) timings[key] = raw
+  }
+  return Object.keys(timings).length > 0 ? timings : null
+}

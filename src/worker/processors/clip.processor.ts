@@ -23,8 +23,9 @@ import path from 'node:path'
 import { mkdir, rm, readFile } from 'node:fs/promises'
 import type { Job } from 'bullmq'
 import { prisma } from '@/lib/config/prisma'
+import type { Prisma } from '@/generated/prisma'
 import { registerProcessor, QUEUE_NAMES } from '@/lib/queue'
-import { CLIP_STAGE_PROGRESS, type ClipJobPayload } from '@/lib/types'
+import { CLIP_STAGE_PROGRESS, type ClipJobPayload, type ClipJobTimings } from '@/lib/types'
 import {
   resolveSource,
   transcribe,
@@ -94,6 +95,10 @@ async function handleClipJob(job: Job): Promise<void> {
   }
 
   try {
+    const startedAt = Date.now()
+    let mark = startedAt
+    const timings: ClipJobTimings = {}
+
     // ── STAGE 1: source (download audio-only / fetch upload) ──────────────
     await prisma.clipJob.update({
       where: { id: clipJobId },
@@ -146,6 +151,10 @@ async function handleClipJob(job: Job): Promise<void> {
         progress: CLIP_STAGE_PROGRESS.DOWNLOADING,
       },
     })
+    timings.downloadMs = Date.now() - mark
+    timings.durationSec = Math.round(durationSec)
+    mark = Date.now()
+    console.log(`[timing] download+transcode ${(timings.downloadMs / 1000).toFixed(1)}s`)
     if (await isCanceled(clipJobId)) return
 
     // ── STAGE 2: transcribe (checkpointed to R2) ──────────────────────────
@@ -171,6 +180,9 @@ async function handleClipJob(job: Job): Promise<void> {
       where: { id: clipJobId },
       data: { progress: CLIP_STAGE_PROGRESS.TRANSCRIBING },
     })
+    timings.transcribeMs = Date.now() - mark
+    mark = Date.now()
+    console.log(`[timing] transcribe ${(timings.transcribeMs / 1000).toFixed(1)}s`)
     if (await isCanceled(clipJobId)) return
 
     // ── STAGE 3: analyze (LLM picks ranges) ───────────────────────────────
@@ -183,6 +195,9 @@ async function handleClipJob(job: Job): Promise<void> {
       where: { id: clipJobId },
       data: { progress: CLIP_STAGE_PROGRESS.ANALYZING },
     })
+    timings.analyzeMs = Date.now() - mark
+    mark = Date.now()
+    console.log(`[timing] analyze ${(timings.analyzeMs / 1000).toFixed(1)}s`)
     if (await isCanceled(clipJobId)) return
 
     // ── STAGE 4: cut (+ thumbnails) → upload to R2 → write Clip rows ───────
@@ -225,6 +240,11 @@ async function handleClipJob(job: Job): Promise<void> {
       await deleteObject(jobRow.uploadKey).catch(() => {})
     }
 
+    timings.cutMs = Date.now() - mark
+    timings.clips = results.length
+    timings.totalMs = Date.now() - startedAt
+    console.log(JSON.stringify({ logger: 'clip-timing', clipJobId, ...timings }))
+
     await prisma.clipJob.update({
       where: { id: clipJobId },
       data: {
@@ -234,6 +254,9 @@ async function handleClipJob(job: Job): Promise<void> {
         clipCount: results.length,
         completedAt: new Date(),
         error: null,
+        /* Documented Prisma Json boundary cast (same pattern as audit metadata
+         * in protected.ts) — ClipJobTimings is JSON-safe by construction. */
+        timings: timings as Prisma.InputJsonValue,
       },
     })
   } catch (err) {

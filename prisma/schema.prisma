@@ -446,6 +446,7 @@ model ClipJob {
   llmProvider     String? // snapshot of provider used, for audit/repro
   transcriber     String?
   transcriptKey   String? // R2 key of the cached transcript (retry checkpoint)
+  timings         Json? // per-stage wall-clock (ms) for perf measurement — see ClipJobTimings
   createdAt       DateTime       @default(now())
   updatedAt       DateTime       @updatedAt
   completedAt     DateTime?
