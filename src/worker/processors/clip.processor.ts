@@ -34,6 +34,7 @@ import {
   probeDuration,
   mediaConfig,
   type Transcript,
+  type ClipResult,
 } from '@/lib/media-pipeline'
 import { getOrganizationTier } from '@/lib/feature-gate'
 import { getClipPlanLimits } from '@/lib/config/clip-limits'
@@ -84,16 +85,6 @@ async function handleClipJob(job: Job): Promise<void> {
       })
       .catch(() => {})
   }
-  const reportCut = (done: number, total: number): void => {
-    const mapped = 70 + Math.round((done / Math.max(1, total)) * 30) // 70–100
-    void prisma.clipJob
-      .update({
-        where: { id: clipJobId },
-        data: { progress: mapped, currentStage: `Cutting clip ${done} of ${total}` },
-      })
-      .catch(() => {})
-  }
-
   try {
     const startedAt = Date.now()
     let mark = startedAt
@@ -205,9 +196,9 @@ async function handleClipJob(job: Job): Promise<void> {
       where: { id: clipJobId },
       data: { status: 'CUTTING', currentStage: 'Cutting clips' },
     })
-    const results = await cut(source, ranges, transcript, clipsDir, reportCut)
-
-    for (const result of results) {
+    /* Stream each clip the moment it's cut: upload → persist the row → bump
+     * progress, so the UI shows clips as they land (time-to-first-clip). */
+    const onClip = async (result: ClipResult, done: number, total: number): Promise<void> => {
       const r2Key = storageKeys.clipKey(organizationId, clipJobId, result.index)
       await putObject(r2Key, await readFile(result.path), 'video/mp4')
 
@@ -233,7 +224,18 @@ async function handleClipJob(job: Job): Promise<void> {
           durationSec: result.range.end - result.range.start,
         },
       })
+
+      await prisma.clipJob.update({
+        where: { id: clipJobId },
+        data: {
+          progress: 70 + Math.round((done / Math.max(1, total)) * 30),
+          currentStage: `Cutting clip ${done} of ${total}`,
+          clipCount: done,
+        },
+      })
     }
+
+    const results = await cut(source, ranges, transcript, clipsDir, onClip)
 
     // Retention: drop the uploaded source now that clips exist (keep clips only).
     if (jobRow.sourceType === 'UPLOAD' && jobRow.uploadKey) {
