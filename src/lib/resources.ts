@@ -229,6 +229,38 @@ export const RESOURCES = {
     description: 'Connect or disconnect third-party services',
     permissions: ['read', 'update'],
   },
+
+  /* Cliptic — AI video clipping. The `limit` is the MONTHLY quota of videos a
+   * plan may process; the protected procedure auto-gates it on `clips.create`
+   * and bumps the usage counter per job (one create = one video processed).
+   * ⭐ EDIT the perPlan numbers to change the monthly quota. Per-video LENGTH
+   * and CONCURRENCY caps live in src/lib/config/clip-limits.ts. */
+  clips: {
+    name: 'Clips',
+    description: 'Turn long videos into AI-selected short clips',
+    permissions: ['create', 'read', 'delete'],
+    limit: {
+      perPlan: { free: 3, starter: 30, pro: 150, enterprise: 'unlimited', portal: 'unlimited' },
+      upgradeMessage: 'Upgrade to {nextPlan} to process more videos this month',
+      availableOnFreeTrial: true,
+      unit: 'videos',
+    },
+    nav: {
+      label: 'Clips',
+      href: '/dashboard/clips',
+      icon: 'Scissors',
+      section: 'main',
+    },
+    audit: {
+      describe: {
+        create: 'Started a clip job for {output.title}',
+        delete: 'Deleted clip job {input.id}',
+      },
+    },
+    rateLimit: {
+      create: { count: 5, window: '1 m' },
+    },
+  },
 } as const satisfies Record<string, ResourceDefinition>
 
 export type ResourceKey = keyof typeof RESOURCES
