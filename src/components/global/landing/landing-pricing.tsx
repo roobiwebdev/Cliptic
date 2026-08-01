@@ -78,21 +78,18 @@ function registryBullets(plan: PlanKey): string[] {
 export function LandingPricing() {
   return (
     <section id="pricing" className="relative mx-auto max-w-6xl scroll-mt-24 overflow-hidden px-4 py-24">
-      {/* Giant gradient display word — cards overlap its lower edge; a vertical
-          fade mask dissolves the descenders into the canvas (no hard cut-off). */}
+      {/* Giant gradient display word — painted ABOVE the cards (z-20) so the p/g
+          descenders extend cleanly over the card tops with the glossy
+          white→silver fill, instead of being clipped by the card edges. */}
       <h2
         aria-hidden="true"
-        style={{
-          WebkitMaskImage: 'linear-gradient(to bottom, black 42%, transparent 88%)',
-          maskImage: 'linear-gradient(to bottom, black 42%, transparent 88%)',
-        }}
-        className="text-gradient pointer-events-none select-none text-center text-[26vw] leading-[0.78] font-bold tracking-tighter lg:text-[14rem]"
+        className="text-gradient pointer-events-none relative z-20 select-none text-center text-[26vw] leading-[0.78] font-bold tracking-tighter lg:text-[14rem]"
       >
         Pricing
       </h2>
       <span className="sr-only">Pricing</span>
 
-      <div className="relative z-10 -mt-[2vw] grid gap-4 md:grid-cols-3 lg:-mt-6">
+      <div className="-mt-[6vw] grid gap-4 md:grid-cols-3 lg:-mt-16">
         {TIERS.map((plan) => {
           const ui = TIER_UI[plan]
           const popular = plan === 'pro'
@@ -109,7 +106,7 @@ export function LandingPricing() {
               )}
             >
               {popular ? (
-                <span className="bg-primary text-primary-foreground absolute -top-3 left-1/2 -translate-x-1/2 rounded-full px-3 py-1 text-xs font-medium whitespace-nowrap">
+                <span className="bg-primary text-primary-foreground absolute -top-3 left-1/2 z-30 -translate-x-1/2 rounded-full px-3 py-1 text-xs font-medium whitespace-nowrap">
                   Most popular
                 </span>
               ) : null}
