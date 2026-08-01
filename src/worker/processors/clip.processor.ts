@@ -68,6 +68,31 @@ async function handleClipJob(job: Job): Promise<void> {
   const clipsDir = path.join(scratchDir, 'clips')
   await mkdir(clipsDir, { recursive: true })
 
+  /* Throttled, fire-and-forget progress writers so real sub-progress (download
+   * %, clip N of M) reaches the UI without blocking the pipeline. */
+  let lastProgressAt = 0
+  const reportDownload = (pct: number): void => {
+    const now = Date.now()
+    if (now - lastProgressAt < 1000) return
+    lastProgressAt = now
+    const mapped = 5 + Math.round((Math.min(100, Math.max(0, pct)) / 100) * 10) // 5–15
+    void prisma.clipJob
+      .update({
+        where: { id: clipJobId },
+        data: { progress: mapped, currentStage: `Downloading source — ${Math.round(pct)}%` },
+      })
+      .catch(() => {})
+  }
+  const reportCut = (done: number, total: number): void => {
+    const mapped = 70 + Math.round((done / Math.max(1, total)) * 30) // 70–100
+    void prisma.clipJob
+      .update({
+        where: { id: clipJobId },
+        data: { progress: mapped, currentStage: `Cutting clip ${done} of ${total}` },
+      })
+      .catch(() => {})
+  }
+
   try {
     // ── STAGE 1: source (download audio-only / fetch upload) ──────────────
     await prisma.clipJob.update({
@@ -99,6 +124,7 @@ async function handleClipJob(job: Job): Promise<void> {
         sourceType: 'youtube',
         scratchDir,
         url: jobRow.sourceUrl,
+        onProgress: reportDownload,
         ...(jobRow.externalVideoId ? { videoId: jobRow.externalVideoId } : {}),
       })
     }
@@ -164,7 +190,7 @@ async function handleClipJob(job: Job): Promise<void> {
       where: { id: clipJobId },
       data: { status: 'CUTTING', currentStage: 'Cutting clips' },
     })
-    const results = await cut(source, ranges, transcript, clipsDir)
+    const results = await cut(source, ranges, transcript, clipsDir, reportCut)
 
     for (const result of results) {
       const r2Key = storageKeys.clipKey(organizationId, clipJobId, result.index)
