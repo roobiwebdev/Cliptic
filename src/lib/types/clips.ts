@@ -76,3 +76,32 @@ export const CLIP_STAGE_PROGRESS = {
   ANALYZING: 70,
   CUTTING: 100,
 } as const
+
+/**
+ * SOURCE OF TRUTH KEYWORDS: clipJobRefSchema, listClipJobsSchema,
+ *   createUploadUrlSchema, ListClipJobsValues, CreateUploadUrlValues
+ *
+ * WHAT:  Input schemas for the remaining clips router procedures.
+ */
+export const clipJobRefSchema = z.object({
+  organizationId: z.string().min(1),
+  id: z.string().min(1),
+})
+
+export const listClipJobsSchema = z.object({
+  organizationId: z.string().min(1),
+  page: z.number().int().positive().optional(),
+  pageSize: z.number().int().positive().max(100).optional(),
+})
+
+export const createUploadUrlSchema = z.object({
+  organizationId: z.string().min(1),
+  filename: z.string().min(1).max(300),
+  /* Only video uploads are accepted. */
+  contentType: z
+    .string()
+    .refine((v) => v.startsWith('video/'), { message: 'Only video files are supported.' }),
+})
+
+export type ListClipJobsValues = z.infer<typeof listClipJobsSchema>
+export type CreateUploadUrlValues = z.infer<typeof createUploadUrlSchema>
