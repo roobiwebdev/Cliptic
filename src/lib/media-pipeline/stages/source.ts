@@ -19,7 +19,7 @@
 import path from 'node:path'
 import { unlink } from 'node:fs/promises'
 import { createHash } from 'node:crypto'
-import { run, capture } from '../lib/exec'
+import { capture, runWithProgress } from '../lib/exec'
 import { createLogger } from '../lib/log'
 import { extractAudio16kMono } from '../lib/media'
 import type { Source } from '../types'
@@ -36,6 +36,8 @@ export interface ResolveSourceParams {
   localPath?: string
   /** Optional stable id override (e.g. ClipJob.externalVideoId). */
   videoId?: string
+  /** Called with the download percentage (0–100) so the UI can show real progress. */
+  onProgress?: (pct: number) => void
 }
 
 /** YouTube (or any yt-dlp URL): audio-only download → 16 kHz mono WAV. */
@@ -50,7 +52,17 @@ async function resolveYoutube(params: ResolveSourceParams): Promise<Source> {
   const srcTemplate = path.join(scratchDir, 'source-audio.%(ext)s')
 
   log(`downloading audio-only: ${url}`)
-  await run('yt-dlp', ['-f', 'ba', '-o', srcTemplate, url])
+  /* --throttled-rate re-extracts a fresh URL when YouTube throttles the CDN
+   * below the threshold (the common cause of a "stuck" download); --newline
+   * makes progress lines parseable so we can report a real percentage. */
+  await runWithProgress(
+    'yt-dlp',
+    ['-f', 'ba', '--newline', '--throttled-rate', '100K', '--retries', '10', '-o', srcTemplate, url],
+    (line) => {
+      const match = line.match(/\[download\]\s+([\d.]+)%/)
+      if (match?.[1] && params.onProgress) params.onProgress(Number(match[1]))
+    }
+  )
 
   const srcPath = await capture('yt-dlp', [
     '--print',
