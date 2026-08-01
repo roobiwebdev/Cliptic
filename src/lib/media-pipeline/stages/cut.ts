@@ -33,8 +33,11 @@ function snapToWordGap(t: number, words: Word[]): number {
   let best = t
   let bestDist = SNAP_WINDOW_SEC + 1
   for (let i = 0; i < words.length - 1; i++) {
-    const gapStart = words[i]!.end
-    const gapEnd = words[i + 1]!.start
+    const current = words[i]
+    const next = words[i + 1]
+    if (!current || !next) continue
+    const gapStart = current.end
+    const gapEnd = next.start
     if (gapEnd <= gapStart) continue
     const mid = (gapStart + gapEnd) / 2
     const dist = Math.abs(mid - t)
@@ -110,7 +113,8 @@ export async function cut(
   const results: ClipResult[] = []
 
   for (let i = 0; i < ranges.length; i++) {
-    const range = ranges[i]!
+    const range = ranges[i]
+    if (!range) continue
     const index = i + 1
     const { start, end } = snapRange(range, transcript)
     const clipPath = path.join(outDir, `clip_${String(index).padStart(2, '0')}.mp4`)

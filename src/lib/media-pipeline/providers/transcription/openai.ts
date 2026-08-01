@@ -68,7 +68,9 @@ export class OpenAITranscriber implements Transcriber {
     const chunks: ChunkResult[] = []
     try {
       for (let i = 0; i < ranges.length; i++) {
-        const { start, end } = ranges[i]!
+        const range = ranges[i]
+        if (!range) continue
+        const { start, end } = range
         const chunkPath = path.join(chunkDir, `chunk-${i}.wav`)
         await run('ffmpeg', ['-y', '-i', audioPath, '-ss', String(start), '-to', String(end), '-c', 'copy', chunkPath])
         log(`chunk ${i + 1}/${ranges.length} [${start.toFixed(1)}–${end.toFixed(1)}s]`)
@@ -136,7 +138,10 @@ export class OpenAITranscriber implements Transcriber {
     const bounds = [0, ...cuts, duration]
     const ranges: Array<{ start: number; end: number }> = []
     for (let i = 0; i < bounds.length - 1; i++) {
-      ranges.push({ start: bounds[i]!, end: bounds[i + 1]! })
+      const start = bounds[i]
+      const end = bounds[i + 1]
+      if (start === undefined || end === undefined) continue
+      ranges.push({ start, end })
     }
     return ranges
   }
