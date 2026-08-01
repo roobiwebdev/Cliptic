@@ -1,0 +1,35 @@
+# Cliptic background worker image (Railway).
+# Ships ffmpeg (cut/transcode), aria2 (multi-connection downloads that beat
+# YouTube throttling), and a FRESH yt-dlp — the tools the pipeline shells out to.
+FROM node:20-bookworm-slim
+
+# System tools the media pipeline shells out to.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      ffmpeg \
+      aria2 \
+      curl \
+      ca-certificates \
+      python3 \
+ && rm -rf /var/lib/apt/lists/*
+
+# Fresh standalone yt-dlp (the apt/system builds lag and re-introduce throttling).
+RUN curl -fsSL https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp \
+      -o /usr/local/bin/yt-dlp \
+ && chmod +x /usr/local/bin/yt-dlp
+
+RUN corepack enable && corepack prepare pnpm@10.30.3 --activate
+
+WORKDIR /app
+
+# Install deps first for layer caching.
+COPY package.json pnpm-lock.yaml ./
+COPY prisma ./prisma
+RUN pnpm install --frozen-lockfile
+
+# App source + generated Prisma client.
+COPY . .
+RUN pnpm prisma generate
+
+# The `worker` script sets NODE_OPTIONS=--conditions=react-server so the
+# `server-only` guard is a no-op in this plain Node process.
+CMD ["pnpm", "worker"]

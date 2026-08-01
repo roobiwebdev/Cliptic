@@ -90,6 +90,20 @@ export interface MediaConfig {
   whisperCpp: { binPath: string; modelPath: string }
   clips: z.infer<typeof clipsSchema>
   sectionPaddingSec: number
+  download: {
+    /** yt-dlp binary (point at a fresh build via YTDLP_BIN). */
+    ytdlpBin: string
+    /** 'auto' uses aria2c when present (bypasses YouTube throttling), else native. */
+    downloader: 'auto' | 'aria2c' | 'native'
+    /** Optional yt-dlp player_client override (e.g. 'tv,ios') to dodge throttled formats. */
+    playerClient: string | undefined
+    /** Cap source resolution to keep the single download small (720 default). */
+    maxHeight: number
+  }
+  encode: {
+    /** libx264 preset for clip encoding (veryfast default; ultrafast = fastest). */
+    preset: string
+  }
 }
 
 export const mediaConfig: MediaConfig = {
@@ -116,6 +130,23 @@ export const mediaConfig: MediaConfig = {
   },
   clips,
   sectionPaddingSec: num(env['SECTION_PADDING_SEC'], 1.5, 'SECTION_PADDING_SEC'),
+  download: {
+    ytdlpBin: env['YTDLP_BIN'] ?? 'yt-dlp',
+    downloader: pickEnum(
+      env['YTDLP_DOWNLOADER'],
+      ['auto', 'aria2c', 'native'] as const,
+      'auto',
+      'YTDLP_DOWNLOADER'
+    ),
+    playerClient:
+      env['YTDLP_PLAYER_CLIENT'] && env['YTDLP_PLAYER_CLIENT'].trim() !== ''
+        ? env['YTDLP_PLAYER_CLIENT'].trim()
+        : undefined,
+    maxHeight: num(env['CLIP_SOURCE_MAX_HEIGHT'], 720, 'CLIP_SOURCE_MAX_HEIGHT'),
+  },
+  encode: {
+    preset: env['CLIP_ENCODE_PRESET'] ?? 'veryfast',
+  },
 }
 
 /** Fail loudly when a stage actually needs the OpenAI key. */

@@ -17,9 +17,9 @@
  * WHERE: Called by the clip worker processor.
  */
 import path from 'node:path'
-import { unlink } from 'node:fs/promises'
 import { createHash } from 'node:crypto'
-import { capture, runWithProgress } from '../lib/exec'
+import { mediaConfig } from '../config'
+import { capture, runWithProgress, commandExists } from '../lib/exec'
 import { createLogger } from '../lib/log'
 import { extractAudio16kMono } from '../lib/media'
 import type { Source } from '../types'
@@ -40,46 +40,75 @@ export interface ResolveSourceParams {
   onProgress?: (pct: number) => void
 }
 
-/** YouTube (or any yt-dlp URL): audio-only download → 16 kHz mono WAV. */
+/**
+ * Common yt-dlp flags: throttle mitigation + aria2c multi-connection (when
+ * available) + optional player_client override. aria2c's parallel connections
+ * are the primary fix for YouTube CDN throttling; --throttled-rate is the
+ * native fallback (re-extracts a fresh URL when a single stream is throttled).
+ */
+function ytdlpNetworkArgs(): string[] {
+  const { downloader, playerClient } = mediaConfig.download
+  const args: string[] = [
+    '--newline',
+    '--throttled-rate',
+    '100K',
+    '--retries',
+    '10',
+    '--concurrent-fragments',
+    '4',
+  ]
+  const useAria = downloader === 'aria2c' || (downloader === 'auto' && commandExists('aria2c'))
+  if (useAria) {
+    args.push('--downloader', 'aria2c', '--downloader-args', 'aria2c:-x16 -s16 -k1M')
+  }
+  if (playerClient) {
+    args.push('--extractor-args', `youtube:player_client=${playerClient}`)
+  }
+  return args
+}
+
+/**
+ * YouTube: download the video ONCE at a capped resolution, then extract audio
+ * for transcription. Every clip is later cut from this LOCAL file — no per-clip
+ * section re-download (the old design fetched from YouTube 1 + N times). This is
+ * the single biggest speed win; combined with aria2c it also crushes throttling.
+ */
 async function resolveYoutube(params: ResolveSourceParams): Promise<Source> {
   const { url, scratchDir } = params
   if (!url) throw new Error('resolveSource: YouTube source requires a url.')
 
-  const videoId = params.videoId ?? (await capture('yt-dlp', ['--print', 'id', '--no-download', url]))
+  const bin = mediaConfig.download.ytdlpBin
+  const videoId = params.videoId ?? (await capture(bin, ['--print', 'id', '--no-download', url]))
   if (!videoId) throw new Error(`Could not resolve a video id for: ${url}`)
 
+  const maxHeight = mediaConfig.download.maxHeight
+  const videoPath = path.join(scratchDir, 'source.mp4')
   const wav = path.join(scratchDir, 'audio.wav')
-  const srcTemplate = path.join(scratchDir, 'source-audio.%(ext)s')
 
-  log(`downloading audio-only: ${url}`)
-  /* --throttled-rate re-extracts a fresh URL when YouTube throttles the CDN
-   * below the threshold (the common cause of a "stuck" download); --newline
-   * makes progress lines parseable so we can report a real percentage. */
+  log(`downloading source once (≤${maxHeight}p): ${url}`)
   await runWithProgress(
-    'yt-dlp',
-    ['-f', 'ba', '--newline', '--throttled-rate', '100K', '--retries', '10', '-o', srcTemplate, url],
+    bin,
+    [
+      '-f',
+      `bv*[height<=${maxHeight}][ext=mp4]+ba[ext=m4a]/b[height<=${maxHeight}][ext=mp4]/b[height<=${maxHeight}]/b`,
+      '--merge-output-format',
+      'mp4',
+      ...ytdlpNetworkArgs(),
+      '-o',
+      videoPath,
+      url,
+    ],
     (line) => {
       const match = line.match(/\[download\]\s+([\d.]+)%/)
       if (match?.[1] && params.onProgress) params.onProgress(Number(match[1]))
     }
   )
 
-  const srcPath = await capture('yt-dlp', [
-    '--print',
-    'filename',
-    '--no-download',
-    '-f',
-    'ba',
-    '-o',
-    srcTemplate,
-    url,
-  ])
+  log('extracting audio for transcription')
+  await extractAudio16kMono(videoPath, wav)
 
-  log('transcoding → 16 kHz mono wav')
-  await extractAudio16kMono(srcPath, wav)
-  await unlink(srcPath).catch(() => {})
-
-  return { videoId, sourceType: 'youtube', isLocal: false, videoSource: url, audioPath: wav, scratchDir }
+  /* isLocal: true — the cut stage encodes clips straight from this local mp4. */
+  return { videoId, sourceType: 'youtube', isLocal: true, videoSource: videoPath, audioPath: wav, scratchDir }
 }
 
 /** Uploaded file (already local on the worker): extract audio, cut from it directly. */
