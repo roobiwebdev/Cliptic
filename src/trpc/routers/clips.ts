@@ -72,12 +72,20 @@ function assertSafeSourceUrl(raw: string): void {
 /* Best-effort removal of a not-yet-started queue job (active jobs are stopped
  * via the CANCELED status the worker checks between stages). */
 async function removeQueuedJob(clipJobId: string): Promise<void> {
+  /* Bounded so a slow/flaky Redis (e.g. a public proxy) can't hang the whole
+   * cancel/delete mutation — the CANCELED status still stops the worker even if
+   * the queue removal times out here. */
   try {
-    const queue = getQueue(QUEUE_NAMES.clipProcessing)
-    const job = await queue?.getJob(clipJobId)
-    if (job) await job.remove()
+    await Promise.race([
+      (async () => {
+        const queue = getQueue(QUEUE_NAMES.clipProcessing)
+        const job = await queue?.getJob(clipJobId)
+        if (job) await job.remove()
+      })(),
+      new Promise<void>((_, reject) => setTimeout(() => reject(new Error('queue-remove-timeout')), 3000)),
+    ])
   } catch {
-    /* active/locked job — the CANCELED status handles it */
+    /* active/locked job or slow Redis — the CANCELED status handles it */
   }
 }
 
