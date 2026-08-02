@@ -253,7 +253,9 @@ export function ClipEditor({ jobId, clipId }: { jobId: string; clipId: string })
               <Crop className="size-4" />
               {data.clip.title ?? `Clip ${data.clip.index}`}
             </h2>
-            <p className="text-muted-foreground text-xs">Reframe &amp; export — captions coming soon.</p>
+            <p className="text-muted-foreground text-xs">
+              Reframe, captions &amp; export — changes autosave.
+            </p>
           </div>
         </div>
       </div>
