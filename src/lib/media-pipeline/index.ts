@@ -7,7 +7,7 @@
 
 /**
  * SOURCE OF TRUTH KEYWORDS: Media Pipeline, resolveSource, transcribe, analyze,
- *   cut, mediaConfig
+ *   cut, renderEditSpec, mediaConfig
  *
  * WHAT:  Public surface of the media pipeline — the four stage functions plus
  *        config and domain types. The worker orchestrates the stages (updating
@@ -22,6 +22,8 @@ export { transcribe } from './stages/transcribe'
 export { analyze, generateTitleForRange, sliceTranscriptWindow } from './stages/analyze'
 export { cut } from './stages/cut'
 export type { OnClipReady } from './stages/cut'
+export { renderEditSpec, buildRenderFilters, OUTPUT_DIMENSIONS } from './stages/render'
+export type { RenderResult, RenderEditSpecParams } from './stages/render'
 export { probeDuration } from './lib/media'
 export { mediaConfig } from './config'
 export type {
