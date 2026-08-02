@@ -123,6 +123,8 @@ export {
   DEFAULT_CAPTION_STYLE,
   createDefaultEditSpec,
   parseEditSpec,
+  editorClipRefSchema,
+  saveEditSchema,
 } from './edit-spec'
 export type {
   AspectRatio,
@@ -135,4 +137,6 @@ export type {
   CaptionSegment,
   CaptionsSpec,
   EditSpec,
+  EditorClipRefValues,
+  SaveEditValues,
 } from './edit-spec'
