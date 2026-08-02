@@ -196,7 +196,14 @@ export function ManualClipStudio({
       toast.success('Cutting your clip…')
       setTitle('')
       setTitleDirty(false)
-      void utils.clips.get.invalidate({ organizationId, id: jobId })
+      /* Optimistically flip to an active status so the detail poller resumes and
+       * shows the new clip as the worker cuts it. Invalidating instead would
+       * refetch the still-COMPLETED row and stop polling before the worker runs. */
+      utils.clips.get.setData({ organizationId, id: jobId }, (old) =>
+        old
+          ? { ...old, status: 'CUTTING', currentStage: 'Cutting your clip', progress: Math.min(old.progress ?? 100, 92) }
+          : old
+      )
     } catch (err) {
       toast.error(errorMessage(err))
     }
