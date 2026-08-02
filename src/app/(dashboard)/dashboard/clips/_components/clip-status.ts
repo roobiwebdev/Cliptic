@@ -33,6 +33,24 @@ export const STAGE_STEPS = [
   { key: 'CUTTING', label: 'Cut' },
 ] as const
 
+/* Manual jobs never run the LLM analyze stage: ingest (download + transcribe),
+ * then cut the user's exact range. */
+const MANUAL_STAGE_STEPS = [
+  { key: 'DOWNLOADING', label: 'Download' },
+  { key: 'TRANSCRIBING', label: 'Transcribe' },
+  { key: 'CUTTING', label: 'Cut' },
+] as const
+
+/**
+ * SOURCE OF TRUTH KEYWORDS: stepsForMode
+ *
+ * WHAT:  The stepper stages for a job's mode — AUTO shows Analyze, MANUAL skips it.
+ * WHERE: JobDetail's progress stepper.
+ */
+export function stepsForMode(mode: string): ReadonlyArray<{ key: string; label: string }> {
+  return mode === 'MANUAL' ? MANUAL_STAGE_STEPS : STAGE_STEPS
+}
+
 const ACTIVE_STATUSES = new Set([
   'QUEUED',
   'DOWNLOADING',

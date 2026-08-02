@@ -48,7 +48,7 @@ import { Progress } from '@/components/ui/progress'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import {
-  STAGE_STEPS,
+  stepsForMode,
   isActiveStatus,
   statusBadgeVariant,
   statusLabel,
@@ -217,7 +217,8 @@ export function JobDetail({ jobId }: { jobId: string }) {
     )
   }
 
-  const currentStageIndex = STAGE_STEPS.findIndex((step) => step.key === job.status)
+  const steps = stepsForMode(job.mode)
+  const currentStageIndex = steps.findIndex((step) => step.key === job.status)
   const heading = job.title ?? job.sourceUrl ?? 'Uploaded video'
 
   return (
@@ -283,7 +284,7 @@ export function JobDetail({ jobId }: { jobId: string }) {
             <Progress value={displayPct} />
 
             <ul className="space-y-3 pt-1">
-              {STAGE_STEPS.map((step, i) => {
+              {steps.map((step, i) => {
                 const done = currentStageIndex > i
                 const isCurrent = currentStageIndex === i
                 return (

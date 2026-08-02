@@ -79,6 +79,23 @@ function formatClock(totalSec: number): string {
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`
 }
 
+/** Content-type from a source extension so the studio's <video> preview plays
+ *  non-mp4 uploads (mov/webm) correctly. YouTube sources are always mp4. */
+function mimeForExt(ext: string): string {
+  switch (ext.toLowerCase()) {
+    case 'webm':
+      return 'video/webm'
+    case 'mov':
+      return 'video/quicktime'
+    case 'mkv':
+      return 'video/x-matroska'
+    case 'avi':
+      return 'video/x-msvideo'
+    default:
+      return 'video/mp4'
+  }
+}
+
 /* Throttled download-progress writer so real download % reaches the UI (5–15%). */
 function makeDownloadReporter(clipJobId: string): (pct: number) => void {
   let lastAt = 0
@@ -144,7 +161,7 @@ async function persistSource(jobRow: ClipJob, source: Source): Promise<void> {
   try {
     const ext = path.extname(source.videoSource).replace('.', '') || 'mp4'
     const sourceKey = storageKeys.sourceKey(jobRow.organizationId, jobRow.id, ext)
-    await putObject(sourceKey, await readFile(source.videoSource), 'video/mp4')
+    await putObject(sourceKey, await readFile(source.videoSource), mimeForExt(ext))
     await prisma.clipJob.update({ where: { id: jobRow.id }, data: { sourceKey } })
     /* The upload staging object is redundant once the source is persisted. */
     if (jobRow.sourceType === 'UPLOAD' && jobRow.uploadKey) {
