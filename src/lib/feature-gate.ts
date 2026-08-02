@@ -86,6 +86,24 @@ const isPlanKey = (value: string): value is PlanKey =>
   (PLAN_KEYS as readonly string[]).includes(value)
 
 /**
+ * SOURCE OF TRUTH KEYWORDS: unlimitedOwnerEmails, UNLIMITED_OWNER_EMAILS
+ *
+ * WHAT:  The set of owner emails granted the unlimited tier for testing.
+ * WHY:   Lets the project owner exercise every feature for free (no subscription)
+ *        WITHOUT enabling the admin portal. Comma-separated; quote/space tolerant
+ *        (hosting UIs keep pasted quotes).
+ * WHERE: getOrganizationTier owner bypass.
+ */
+function unlimitedOwnerEmails(): Set<string> {
+  return new Set(
+    (process.env['UNLIMITED_OWNER_EMAILS'] ?? '')
+      .split(',')
+      .map((e) => e.trim().replace(/^["']|["']$/g, '').trim().toLowerCase())
+      .filter(Boolean)
+  )
+}
+
+/**
  * SOURCE OF TRUTH KEYWORDS: getOrganizationTier, OrganizationTier
  *
  * WHAT:  Resolves an org's effective plan tier + active subscription summary
@@ -117,6 +135,28 @@ export const getOrganizationTier = cache(
         planName: PLANS.portal.name,
         isOnTrial: false,
         subscription: null,
+      }
+    }
+
+    /* Owner-testing bypass: an org OWNED by an email in UNLIMITED_OWNER_EMAILS
+     * gets the unlimited `portal` tier — so the project owner can test every
+     * feature for free with no subscription. This grants quota only, NOT admin
+     * portal access (that stays gated by isPortalOrganization). */
+    const ownerAllow = unlimitedOwnerEmails()
+    if (ownerAllow.size > 0) {
+      const owner = await prisma.member.findFirst({
+        where: { organizationId, role: 'owner' },
+        select: { user: { select: { email: true } } },
+      })
+      const rawEmail = owner?.user.email
+      const email = rawEmail ? rawEmail.trim().toLowerCase() : undefined
+      if (email && ownerAllow.has(email)) {
+        return {
+          tier: 'portal',
+          planName: PLANS.portal.name,
+          isOnTrial: false,
+          subscription: null,
+        }
       }
     }
 
