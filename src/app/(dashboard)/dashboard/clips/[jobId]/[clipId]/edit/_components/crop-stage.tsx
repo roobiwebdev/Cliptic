@@ -24,8 +24,13 @@
 import * as React from 'react'
 import { Pause, Play } from 'lucide-react'
 import { cn } from '@/lib/utils'
-import type { CropRegion, ReframeLayout } from '@/lib/types'
+import type { CaptionStyle, CropRegion, ReframeLayout } from '@/lib/types'
 import { moveRegion } from './reframe-geometry'
+
+interface CaptionPreview {
+  segments: { startSec: number; endSec: number; text: string }[]
+  style: CaptionStyle
+}
 
 interface CropStageProps {
   videoUrl: string
@@ -35,6 +40,8 @@ interface CropStageProps {
   onActiveRegion: (index: number) => void
   onRegionsChange: (regions: CropRegion[]) => void
   onVideoAspect: (aspect: number) => void
+  /** Approximate live caption preview (real karaoke/burn happens server-side). */
+  captionPreview?: CaptionPreview | null
 }
 
 export function CropStage({
@@ -45,6 +52,7 @@ export function CropStage({
   onActiveRegion,
   onRegionsChange,
   onVideoAspect,
+  captionPreview,
 }: CropStageProps) {
   const stageRef = React.useRef<HTMLDivElement>(null)
   const videoRef = React.useRef<HTMLVideoElement>(null)
@@ -117,12 +125,17 @@ export function CropStage({
   const pct = (sec: number): number =>
     duration > 0 ? Math.min(100, Math.max(0, (sec / duration) * 100)) : 0
 
+  const capStyle = captionPreview?.style
+  const currentCaption = captionPreview?.segments.find(
+    (s) => playhead >= s.startSec && playhead < s.endSec
+  )
+
   return (
     <div className="space-y-3">
       <div
         ref={stageRef}
         className="bg-background relative w-full max-w-xl select-none overflow-hidden rounded-xl border"
-        style={{ aspectRatio: String(videoAspect) }}
+        style={{ aspectRatio: String(videoAspect), containerType: 'size' }}
       >
         <video
           ref={videoRef}
@@ -179,6 +192,32 @@ export function CropStage({
             </div>
           )
         })}
+
+        {/* Approximate caption preview at the playhead (real burn is server-side). */}
+        {currentCaption && capStyle ? (
+          <div
+            className={cn(
+              'pointer-events-none absolute inset-x-0 flex justify-center px-[6%] text-center leading-tight',
+              capStyle.position === 'top'
+                ? 'top-[6%]'
+                : capStyle.position === 'center'
+                  ? 'top-1/2 -translate-y-1/2'
+                  : 'bottom-[6%]'
+            )}
+          >
+            <span
+              style={{
+                color: capStyle.color,
+                fontSize: `${capStyle.fontSizePct}cqh`,
+                fontFamily: capStyle.fontFamily,
+                fontWeight: 800,
+                WebkitTextStroke: '0.04em var(--background)',
+              }}
+            >
+              {capStyle.uppercase ? currentCaption.text.toUpperCase() : currentCaption.text}
+            </span>
+          </div>
+        ) : null}
       </div>
 
       {/* Transport — the crop overlay covers the frame, so playback lives here. */}
