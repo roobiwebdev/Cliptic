@@ -425,6 +425,20 @@ enum ClipSourceType {
   UPLOAD
 }
 
+/// How a job's clips are chosen. AUTO = the LLM picks viral moments (default);
+/// MANUAL = the user supplies exact ranges (worker skips the analyze stage).
+enum ClipJobMode {
+  AUTO
+  MANUAL
+}
+
+/// Who chose a given clip's range. AI = the analyze LLM; MANUAL = the user's
+/// exact timestamp pick. Lets one video hold both AI and hand-picked clips.
+enum ClipSource {
+  AI
+  MANUAL
+}
+
 /// ClipJob — one clip-generation run for an organization.
 ///
 /// SOURCE OF TRUTH KEYWORD: ClipJob
@@ -433,9 +447,12 @@ model ClipJob {
   organizationId  String
   userId          String // actor who started the job
   status          ClipJobStatus  @default(QUEUED)
+  mode            ClipJobMode    @default(AUTO) // AUTO (LLM) or MANUAL (user ranges)
   sourceType      ClipSourceType
   sourceUrl       String? // YOUTUBE: the pasted URL
   uploadKey       String? // UPLOAD: R2 key of the uploaded source file
+  sourceKey       String? // persisted 720p source (R2) — reused by manual re-cuts
+  manualRanges    Json? // pending user-picked ranges awaiting a manual cut — see ManualRange
   externalVideoId String? // yt-dlp video id, or a content hash for uploads
   title           String?
   durationSec     Float?
@@ -471,8 +488,9 @@ model Clip {
   clipJobId      String
   organizationId String
   index          Int // 1-based order within the job
+  source         ClipSource @default(AI) // AI-selected or a user MANUAL pick
   title          String?
-  reason         String? // why the AI picked this moment
+  reason         String? // why the AI picked this moment (null for manual)
   score          Int? // 0–100 virality guess (optional)
   startSec       Float
   endSec         Float

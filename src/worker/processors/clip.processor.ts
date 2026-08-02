@@ -237,9 +237,21 @@ async function handleClipJob(job: Job): Promise<void> {
 
     const results = await cut(source, ranges, transcript, clipsDir, onClip)
 
-    // Retention: drop the uploaded source now that clips exist (keep clips only).
-    if (jobRow.sourceType === 'UPLOAD' && jobRow.uploadKey) {
-      await deleteObject(jobRow.uploadKey).catch(() => {})
+    /* Persist the 720p source under the `sources/` prefix so a later MANUAL cut
+     * reuses it — near-instant, and never re-hits YouTube. It carries its own
+     * (shorter) retention via a lifecycle rule on `sources/`
+     * (CLIP_SOURCE_RETENTION_DAYS). Non-fatal: clips already exist. */
+    try {
+      const sourceExt = path.extname(source.videoSource).replace('.', '') || 'mp4'
+      const sourceKey = storageKeys.sourceKey(organizationId, clipJobId, sourceExt)
+      await putObject(sourceKey, await readFile(source.videoSource), 'video/mp4')
+      await prisma.clipJob.update({ where: { id: clipJobId }, data: { sourceKey } })
+      /* The upload staging object is now redundant — the persisted source replaces it. */
+      if (jobRow.sourceType === 'UPLOAD' && jobRow.uploadKey) {
+        await deleteObject(jobRow.uploadKey).catch(() => {})
+      }
+    } catch (err) {
+      console.warn(`[clip] source persist failed for ${clipJobId}: ${userSafeError(err)}`)
     }
 
     timings.cutMs = Date.now() - mark

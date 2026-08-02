@@ -204,6 +204,8 @@ export const clipsRouter = createTRPCRouter({
         .deletePrefix(storage.storageKeys.clipJobPrefix(input.organizationId, job.id))
         .catch(() => {})
       if (job.uploadKey) await storage.deleteObject(job.uploadKey).catch(() => {})
+      /* The persisted source lives under the separate `sources/` prefix. */
+      if (job.sourceKey) await storage.deleteObject(job.sourceKey).catch(() => {})
 
       return ctx.db.clipJob.delete({ where: { id: job.id } })
     }),
