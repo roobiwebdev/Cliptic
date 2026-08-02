@@ -9,7 +9,8 @@
  * SOURCE OF TRUTH KEYWORDS: storageKeys, putObject, getSignedDownloadUrl,
  *   getSignedUploadUrl, deletePrefix, uploadFile, Storage Engine, presigned URL,
  *   clipJobPrefix, clipObjectKey, thumbnailObjectKey, transcriptObjectKey,
- *   sourceUploadKey, sourceKey
+ *   sourceUploadKey, sourceKey, clipEditPrefix, clipEditOutputKey,
+ *   clipEditThumbnailKey
  *
  * WHAT:  The Storage Engine's data-access layer — tenant-prefixed key builders
  *        plus thin R2 operations (put, presign get/put, delete-by-prefix).
@@ -60,6 +61,15 @@ export const storageKeys = {
   /** Standalone key for a pending direct upload, before a job exists. */
   pendingUploadKey: (organizationId: string, token: string, ext = 'mp4'): string =>
     `orgs/${organizationId}/uploads/${token}.${ext}`,
+  /** Editor render artifacts, tenant-isolated under their OWN `clip-edits/`
+   *  prefix so an edited output survives independently of the source job's
+   *  `clip-jobs/` folder (and its retention). One folder per ClipEdit. */
+  clipEditPrefix: (organizationId: string, clipEditId: string): string =>
+    `orgs/${organizationId}/clip-edits/${clipEditId}`,
+  clipEditOutputKey: (organizationId: string, clipEditId: string): string =>
+    `orgs/${organizationId}/clip-edits/${clipEditId}/edited.mp4`,
+  clipEditThumbnailKey: (organizationId: string, clipEditId: string): string =>
+    `orgs/${organizationId}/clip-edits/${clipEditId}/edited.jpg`,
 }
 
 const DEFAULT_DOWNLOAD_TTL_SEC = 300 // 5 min

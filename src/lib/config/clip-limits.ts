@@ -7,7 +7,7 @@
 
 /**
  * SOURCE OF TRUTH KEYWORDS: CLIP_PLAN_LIMITS, ClipPlanLimits, getClipPlanLimits,
- *   maxVideoMinutes, maxConcurrentJobs
+ *   maxVideoMinutes, maxConcurrentJobs, maxConcurrentRenders
  *
  * WHAT:  Per-plan Cliptic caps that AREN'T monthly counters — max source-video
  *        length and max concurrent jobs. Keyed by PlanKey.
@@ -33,17 +33,21 @@ export interface ClipPlanLimits {
   maxVideoMinutes: number
   /** How many clip jobs this plan may run at once (queued + processing). */
   maxConcurrentJobs: number
+  /** How many editor render/export jobs this plan may run at once. Point-in-time
+   *  cap (like maxConcurrentJobs) — the per-minute burst cap lives on
+   *  RESOURCES.clips.rateLimit.render (src/lib/resources.ts). */
+  maxConcurrentRenders: number
 }
 
 /* Starter defaults — tune freely. `enterprise`/`portal` are effectively
  * uncapped on length. Monthly video quota (not here): free 3 / starter 30 /
  * pro 150 / enterprise ∞ — see RESOURCES.clips in src/lib/resources.ts. */
 export const CLIP_PLAN_LIMITS: Record<PlanKey, ClipPlanLimits> = {
-  free: { maxVideoMinutes: 30, maxConcurrentJobs: 1 },
-  starter: { maxVideoMinutes: 90, maxConcurrentJobs: 2 },
-  pro: { maxVideoMinutes: 180, maxConcurrentJobs: 3 },
-  enterprise: { maxVideoMinutes: Number.POSITIVE_INFINITY, maxConcurrentJobs: 5 },
-  portal: { maxVideoMinutes: Number.POSITIVE_INFINITY, maxConcurrentJobs: 10 },
+  free: { maxVideoMinutes: 30, maxConcurrentJobs: 1, maxConcurrentRenders: 1 },
+  starter: { maxVideoMinutes: 90, maxConcurrentJobs: 2, maxConcurrentRenders: 2 },
+  pro: { maxVideoMinutes: 180, maxConcurrentJobs: 3, maxConcurrentRenders: 3 },
+  enterprise: { maxVideoMinutes: Number.POSITIVE_INFINITY, maxConcurrentJobs: 5, maxConcurrentRenders: 5 },
+  portal: { maxVideoMinutes: Number.POSITIVE_INFINITY, maxConcurrentJobs: 10, maxConcurrentRenders: 10 },
 }
 
 /**
