@@ -124,14 +124,30 @@ export const clipsRouter = createTRPCRouter({
         assertSafeSourceUrl(input.url)
       }
 
+      /* MANUAL: the worker downloads ONLY this slice and cuts it. Bound the length
+       * by the plan's per-video minutes so a "clip" can't be a whole long video. */
+      if (input.mode === 'MANUAL' && input.manualRange) {
+        const lengthSec = input.manualRange.endSec - input.manualRange.startSec
+        const maxSec = Number.isFinite(caps.maxVideoMinutes) ? caps.maxVideoMinutes * 60 : Infinity
+        if (lengthSec > maxSec) {
+          throw new TRPCError({
+            code: 'BAD_REQUEST',
+            message: `A single clip can be at most ${caps.maxVideoMinutes} minutes on your plan.`,
+          })
+        }
+      }
+
       const job = await ctx.db.clipJob.create({
         data: {
           organizationId: input.organizationId,
           userId: ctx.user.id,
           sourceType: input.sourceType,
-          /* MANUAL just ingests (download + transcript) — the worker skips
-           * analyze/cut and the user picks clips in the detail studio. */
+          /* MANUAL cuts only the user's exact range (stored below); the worker
+           * skips download-whole/transcribe/analyze. */
           mode: input.mode,
+          ...(input.mode === 'MANUAL' && input.manualRange
+            ? { manualRanges: [input.manualRange] }
+            : {}),
           sourceUrl: input.sourceType === 'YOUTUBE' ? (input.url ?? null) : null,
           uploadKey: input.sourceType === 'UPLOAD' ? (input.uploadKey ?? null) : null,
         },

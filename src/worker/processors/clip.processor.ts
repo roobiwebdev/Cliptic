@@ -39,6 +39,7 @@ import {
 } from '@/lib/types'
 import {
   resolveSource,
+  resolveYoutubeSection,
   transcribe,
   analyze,
   cut,
@@ -47,12 +48,12 @@ import {
   generateTitleForRange,
   sliceTranscriptWindow,
   type Transcript,
-  type ClipRange,
   type ClipResult,
   type Source,
 } from '@/lib/media-pipeline'
 import { getOrganizationTier } from '@/lib/feature-gate'
 import { getClipPlanLimits } from '@/lib/config/clip-limits'
+import { formatClock } from '@/lib/utils'
 import {
   putObject,
   downloadToFile,
@@ -71,12 +72,6 @@ async function isCanceled(clipJobId: string): Promise<boolean> {
 function userSafeError(err: unknown): string {
   const msg = err instanceof Error ? err.message : String(err)
   return msg.length > 300 ? `${msg.slice(0, 297)}…` : msg
-}
-
-/** MM:SS for a default manual-clip title when no transcript text is available. */
-function formatClock(totalSec: number): string {
-  const s = Math.max(0, Math.round(totalSec))
-  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`
 }
 
 /** Content-type from a source extension so the studio's <video> preview plays
@@ -335,58 +330,17 @@ async function runAutoPipeline(jobRow: ClipJob, scratchDir: string, clipsDir: st
   })
 }
 
-/* ── Path 2: MANUAL-PREPARE — ingest a manual-mode source, ready for the studio ── */
+/* ── Path 2: MANUAL-CUT — download/reuse only what's needed and cut the user's
+ *    EXACT range(s). For a fresh YouTube manual clip this fetches ONLY the
+ *    section (fast); no full-video download, transcript, or analyze. ─────────── */
 
-async function runManualPrepare(jobRow: ClipJob, scratchDir: string): Promise<void> {
-  const clipJobId = jobRow.id
-
-  await prisma.clipJob.update({
-    where: { id: clipJobId },
-    data: {
-      status: 'DOWNLOADING',
-      currentStage: 'Downloading source',
-      progress: 5,
-      transcriber: mediaConfig.transcriber,
-      error: null,
-    },
-  })
-  const { source } = await acquireSource(jobRow, scratchDir)
-  await persistSource(jobRow, source)
-  if (await isCanceled(clipJobId)) return
-
-  // Transcribe + cache so studio title suggestions are instant later.
-  await prisma.clipJob.update({
-    where: { id: clipJobId },
-    data: { status: 'TRANSCRIBING', currentStage: 'Preparing transcript', progress: 55 },
-  })
-  await getOrMakeTranscript(jobRow, source)
-  if (await isCanceled(clipJobId)) return
-
-  await prisma.clipJob.update({
-    where: { id: clipJobId },
-    data: {
-      status: 'COMPLETED',
-      currentStage: 'Ready for manual clips',
-      progress: 100,
-      clipCount: 0,
-      completedAt: new Date(),
-      error: null,
-    },
-  })
-}
-
-/* ── Path 3: MANUAL-CUT — cut the user's pending ranges and append them ──────── */
-
-/** Get the source onto local scratch — reuse the persisted copy (fast) or re-acquire. */
-async function ensureSourceForManual(
+/** A whole-video source we can cut ANY range from — the persisted 720p source
+ *  (adding a clip to a processed video) or a downloaded upload. Returns null when
+ *  there's no whole source (a fresh YouTube manual clip → section-download each). */
+async function sharedManualSource(
   jobRow: ClipJob,
   scratchDir: string
-): Promise<{ source: Source; transcript: Transcript | undefined }> {
-  const loadTranscript = async (): Promise<Transcript | undefined> =>
-    jobRow.transcriptKey
-      ? (JSON.parse((await downloadBuffer(jobRow.transcriptKey)).toString('utf8')) as Transcript)
-      : undefined
-
+): Promise<{ source: Source; transcript: Transcript | undefined } | null> {
   if (jobRow.sourceKey) {
     const ext = path.extname(jobRow.sourceKey).replace('.', '') || 'mp4'
     const local = path.join(scratchDir, `source.${ext}`)
@@ -400,17 +354,52 @@ async function ensureSourceForManual(
         audioPath: '',
         scratchDir,
       }
-      return { source, transcript: await loadTranscript() }
+      const transcript = jobRow.transcriptKey
+        ? (JSON.parse((await downloadBuffer(jobRow.transcriptKey)).toString('utf8')) as Transcript)
+        : undefined
+      return { source, transcript }
     } catch {
-      /* Persisted source expired/missing — fall through to re-acquire below. */
+      /* persisted source expired/missing — fall through */
     }
   }
+  if (jobRow.sourceType === 'UPLOAD' && jobRow.uploadKey) {
+    const localSrc = path.join(scratchDir, `source${path.extname(jobRow.uploadKey) || '.mp4'}`)
+    await downloadToFile(jobRow.uploadKey, localSrc)
+    const source: Source = {
+      videoId: jobRow.externalVideoId ?? jobRow.id,
+      sourceType: 'upload',
+      isLocal: true,
+      videoSource: localSrc,
+      audioPath: '',
+      scratchDir,
+    }
+    return { source, transcript: undefined }
+  }
+  return null
+}
 
-  // No usable persisted source (e.g. expired past its retention) — re-acquire it.
-  const { source } = await acquireSource(jobRow, scratchDir)
-  await persistSource(jobRow, source)
-  const transcript = jobRow.transcriptKey ? await loadTranscript() : await getOrMakeTranscript(jobRow, source)
-  return { source, transcript }
+/** Title for a manual range — the user's own, else AI from the window's words
+ *  (cached transcript, or a transcribe of the fetched section), else a timestamp. */
+async function manualTitle(
+  range: ManualRange,
+  cutStart: number,
+  cutEnd: number,
+  source: Source,
+  transcript: Transcript | undefined
+): Promise<string> {
+  if (range.title) return range.title
+  let text = ''
+  if (transcript) text = sliceTranscriptWindow(transcript, cutStart, cutEnd)
+  else if (source.audioPath) {
+    try {
+      text = (await transcribe(source)).text
+    } catch {
+      /* transcription is best-effort for the title */
+    }
+  }
+  return (
+    (await generateTitleForRange(text)) || `Clip ${formatClock(range.startSec)}–${formatClock(range.endSec)}`
+  )
 }
 
 async function runManualCut(
@@ -421,49 +410,92 @@ async function runManualCut(
 ): Promise<void> {
   const clipJobId = jobRow.id
   const organizationId = jobRow.organizationId
+  /* Appending to a video that already has clips? On failure we must NOT destroy
+   * access to them, so revert to COMPLETED instead of FAILED. */
+  const wasCompleted = jobRow.status === 'COMPLETED' || jobRow.clipCount > 0
 
   await prisma.clipJob.update({
     where: { id: clipJobId },
-    data: { status: 'CUTTING', currentStage: 'Cutting your clip', error: null },
+    data: { status: 'CUTTING', currentStage: 'Cutting your clip', progress: 40, error: null },
   })
 
-  const { source, transcript } = await ensureSourceForManual(jobRow, scratchDir)
+  try {
+    // A whole source we can reuse for every range, or null ⇒ section-download each.
+    const shared = await sharedManualSource(jobRow, scratchDir)
 
-  // Build exact ClipRanges (clamp to duration; fill missing titles from the transcript).
-  const clipRanges: ClipRange[] = []
-  for (const r of pending) {
-    const start = Math.max(0, r.startSec)
-    const end = jobRow.durationSec ? Math.min(r.endSec, jobRow.durationSec) : r.endSec
-    if (end - start < 1) continue
-    let title = r.title
-    if (!title) {
-      const windowText = transcript ? sliceTranscriptWindow(transcript, start, end) : ''
-      title = (await generateTitleForRange(windowText)) || `Clip ${formatClock(start)}–${formatClock(end)}`
+    let created = 0
+    for (let i = 0; i < pending.length; i++) {
+      const r = pending[i]
+      if (!r) continue
+
+      let source: Source
+      let transcript: Transcript | undefined
+      let cutStart: number
+      let cutEnd: number
+
+      if (shared) {
+        source = shared.source
+        transcript = shared.transcript
+        cutStart = Math.max(0, r.startSec)
+        cutEnd = jobRow.durationSec ? Math.min(r.endSec, jobRow.durationSec) : r.endSec
+      } else {
+        if (!jobRow.sourceUrl) throw new Error('This clip is missing its source video.')
+        // Download ONLY this slice — the whole point of manual mode.
+        source = await resolveYoutubeSection({
+          url: jobRow.sourceUrl,
+          startSec: r.startSec,
+          endSec: r.endSec,
+          scratchDir: path.join(scratchDir, `sec-${i}`),
+        })
+        transcript = undefined
+        cutStart = 0
+        cutEnd = Math.max(0.5, r.endSec - r.startSec) // the section's timeline is 0..len
+      }
+      if (cutEnd - cutStart < 1) continue
+
+      const title = await manualTitle(r, cutStart, cutEnd, source, transcript)
+      const outDir = path.join(clipsDir, String(i))
+      await mkdir(outDir, { recursive: true })
+      const onClip = makeOnClip(clipJobId, organizationId, {
+        clipSource: 'MANUAL',
+        indexOffset: jobRow.clipCount + created,
+      })
+      /* undefined transcript ⇒ cut() honors the exact in/out (no silence-snap). */
+      await cut(source, [{ start: cutStart, end: cutEnd, reason: '', title }], undefined, outDir, onClip)
+      created += 1
     }
-    clipRanges.push({ start, end, reason: '', title })
+
+    if (created === 0) throw new Error('No valid range to cut for this manual clip.')
+
+    await prisma.clipJob.update({
+      where: { id: clipJobId },
+      data: {
+        status: 'COMPLETED',
+        currentStage: 'Done',
+        progress: 100,
+        clipCount: jobRow.clipCount + created,
+        manualRanges: Prisma.DbNull, // pending ranges consumed
+        completedAt: new Date(),
+        error: null,
+      },
+    })
+  } catch (err) {
+    if (wasCompleted) {
+      // Preserve the existing clips; surface a soft error, don't retry-loop.
+      await prisma.clipJob.update({
+        where: { id: clipJobId },
+        data: {
+          status: 'COMPLETED',
+          currentStage: 'Done',
+          progress: 100,
+          manualRanges: Prisma.DbNull,
+          error: `Couldn't add that clip: ${userSafeError(err)}`,
+        },
+      })
+      return
+    }
+    throw err // fresh manual job → surface as FAILED via the outer catch
   }
-  if (clipRanges.length === 0) throw new Error('No valid range to cut for this manual clip.')
-
-  /* Cut EXACTLY — pass undefined transcript so cut() skips silence-snapping and
-   * honors the user's precise in/out points. Append after existing clips. */
-  const onClip = makeOnClip(clipJobId, organizationId, {
-    clipSource: 'MANUAL',
-    indexOffset: jobRow.clipCount,
-  })
-  const results = await cut(source, clipRanges, undefined, clipsDir, onClip)
-
-  await prisma.clipJob.update({
-    where: { id: clipJobId },
-    data: {
-      status: 'COMPLETED',
-      currentStage: 'Done',
-      progress: 100,
-      clipCount: jobRow.clipCount + results.length,
-      manualRanges: Prisma.DbNull, // pending ranges consumed
-      completedAt: new Date(),
-      error: null,
-    },
-  })
 }
 
 /* ── Dispatch ────────────────────────────────────────────────────────────────── */
@@ -474,7 +506,10 @@ async function handleClipJob(job: Job): Promise<void> {
   const jobRow = await prisma.clipJob.findUnique({ where: { id: clipJobId } })
   if (!jobRow) return
 
-  const scratchDir = path.join(os.tmpdir(), 'cliptic', clipJobId)
+  /* Scratch is keyed by the BullMQ job id (not just clipJobId) so a manual cut
+   * appending to a job never shares/deletes another run's in-flight files. */
+  const safeJobId = String(job.id ?? clipJobId).replace(/[^\w-]/g, '_')
+  const scratchDir = path.join(os.tmpdir(), 'cliptic', clipJobId, safeJobId)
   const clipsDir = path.join(scratchDir, 'clips')
   await mkdir(clipsDir, { recursive: true })
 
@@ -486,7 +521,11 @@ async function handleClipJob(job: Job): Promise<void> {
     } else if (jobRow.status === 'COMPLETED' || jobRow.status === 'CANCELED') {
       return
     } else if (jobRow.mode === 'MANUAL') {
-      await runManualPrepare(jobRow, scratchDir)
+      // Manual jobs carry their range at create time; none here ⇒ nothing to cut.
+      await prisma.clipJob.update({
+        where: { id: clipJobId },
+        data: { status: 'FAILED', currentStage: 'Failed', error: 'No clip range was provided.' },
+      })
     } else {
       await runAutoPipeline(jobRow, scratchDir, clipsDir)
     }

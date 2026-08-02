@@ -72,11 +72,13 @@ export const createClipJobSchema = z
   .object({
     organizationId: z.string().min(1),
     sourceType: clipSourceTypeSchema,
-    /* AUTO (default) = the LLM picks clips; MANUAL = ingest the source and leave
-     * clip-picking to the detail studio (worker skips analyze/cut). */
+    /* AUTO (default) = the LLM picks clips; MANUAL = the user gives the exact
+     * range and we cut only that slice (fast, no analyze). */
     mode: clipJobModeSchema.default('AUTO'),
     url: z.string().url().optional(),
     uploadKey: z.string().min(1).optional(),
+    /* Required for MANUAL: the exact [start, end] (+ optional title) to cut. */
+    manualRange: manualRangeSchema.optional(),
   })
   .superRefine((val, ctx) => {
     if (val.sourceType === 'YOUTUBE' && !val.url) {
@@ -84,6 +86,9 @@ export const createClipJobSchema = z
     }
     if (val.sourceType === 'UPLOAD' && !val.uploadKey) {
       ctx.addIssue({ code: 'custom', path: ['uploadKey'], message: 'An uploaded file is required.' })
+    }
+    if (val.mode === 'MANUAL' && !val.manualRange) {
+      ctx.addIssue({ code: 'custom', path: ['manualRange'], message: 'Enter the start and end times to clip.' })
     }
   })
 
