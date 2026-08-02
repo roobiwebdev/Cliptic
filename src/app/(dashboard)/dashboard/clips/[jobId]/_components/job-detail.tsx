@@ -358,16 +358,51 @@ export function JobDetail({ jobId }: { jobId: string }) {
         : null}
 
       {job.clips.length > 0 ? (
-        <div className="grid gap-4 sm:grid-cols-2">
-          {job.clips.map((clip) => (
-            <ClipCard key={clip.id} clip={clip} />
-          ))}
+        <div className="space-y-4">
+          <div className="flex items-center justify-between">
+            <h2 className="text-sm font-medium">
+              Clips <span className="text-muted-foreground">({job.clips.length})</span>
+            </h2>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => void downloadAll(job.clips.map((c) => c.downloadUrl))}
+            >
+              <Download />
+              Download all
+            </Button>
+          </div>
+          <div className="grid gap-4 sm:grid-cols-2">
+            {job.clips.map((clip) => (
+              <ClipCard key={clip.id} clip={clip} />
+            ))}
+          </div>
         </div>
       ) : job.status === 'COMPLETED' ? (
         <p className="text-muted-foreground text-sm">No clips were produced for this video.</p>
       ) : null}
     </div>
   )
+}
+
+/* Trigger a browser "save file" for a URL whose response already carries
+ * Content-Disposition: attachment — no `download` attr or blob buffering needed. */
+function triggerDownload(url: string): void {
+  const a = document.createElement('a')
+  a.href = url
+  a.rel = 'noopener'
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+}
+
+/* Save every clip, staggered so the browser doesn't drop rapid-fire downloads.
+ * (A server-side ZIP is the future upgrade if batch sizes grow.) */
+async function downloadAll(urls: string[]): Promise<void> {
+  for (const url of urls) {
+    triggerDownload(url)
+    await new Promise((resolve) => setTimeout(resolve, 400))
+  }
 }
 
 function ClipCard({ clip }: { clip: ClipItem }) {
@@ -396,8 +431,7 @@ function ClipCard({ clip }: { clip: ClipItem }) {
             {(clip.endSec - clip.startSec).toFixed(0)}s
           </span>
           <a
-            href={clip.videoUrl}
-            download={`clip_${clip.index}.mp4`}
+            href={clip.downloadUrl}
             className={buttonVariants({ size: 'sm', variant: 'outline' })}
           >
             <Download />
