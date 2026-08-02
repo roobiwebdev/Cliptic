@@ -29,14 +29,27 @@ const env = process.env
 export type LlmProviderName = 'openai' | 'anthropic' | 'ollama'
 export type TranscriberName = 'openai' | 'whisper-cpp'
 
+/* Normalize a raw env value: trim, then strip ONE pair of matching surrounding
+ * quotes. Hosting UIs (Vercel/Railway) keep the quotes when you paste
+ * `KEY="value"`, so `process.env.KEY` becomes the literal `"value"` (or `""`).
+ * Cleaning here makes every parser treat those as the plain value / unset. */
+function cleanEnv(value: string | undefined): string {
+  if (value === undefined) return ''
+  const v = value.trim()
+  if (v.length >= 2 && ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith("'") && v.endsWith("'")))) {
+    return v.slice(1, -1).trim()
+  }
+  return v
+}
+
 function pickEnum<T extends string>(
   value: string | undefined,
   allowed: readonly T[],
   fallback: T,
   varName: string
 ): T {
-  if (value === undefined || value.trim() === '') return fallback
-  const v = value.trim()
+  const v = cleanEnv(value)
+  if (v === '') return fallback
   if (!(allowed as readonly string[]).includes(v)) {
     throw new Error(`Invalid ${varName}="${value}". Allowed: ${allowed.join(', ')}.`)
   }
@@ -44,8 +57,9 @@ function pickEnum<T extends string>(
 }
 
 function num(value: string | undefined, fallback: number, varName: string): number {
-  if (value === undefined || value.trim() === '') return fallback
-  const n = Number(value)
+  const v = cleanEnv(value)
+  if (v === '') return fallback
+  const n = Number(v)
   if (!Number.isFinite(n)) throw new Error(`${varName} must be a number, got "${value}".`)
   return n
 }
