@@ -29,7 +29,8 @@ import { ArrowLeft, Crop, Download, Loader2, Sparkles, XCircle } from 'lucide-re
 import { trpc } from '@/trpc/react-provider'
 import { useActiveOrganizationId } from '@/hooks/use-active-organization'
 import { cn } from '@/lib/utils'
-import type { AspectRatio, EditSpec, ReframeLayout } from '@/lib/types'
+import { DEFAULT_CAPTION_STYLE } from '@/lib/types'
+import type { AspectRatio, CaptionStyle, EditSpec, ReframeLayout } from '@/lib/types'
 import { Button, buttonVariants } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
@@ -37,6 +38,7 @@ import { Progress } from '@/components/ui/progress'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { CropStage } from './crop-stage'
+import { CaptionsPanel } from './captions-panel'
 import { defaultRegions, regionRatio, regionSize, resizeRegion } from './reframe-geometry'
 
 const ASPECTS: { value: AspectRatio; label: string; hint: string }[] = [
@@ -68,6 +70,7 @@ export function ClipEditor({ jobId, clipId }: { jobId: string; clipId: string })
   const [localSpec, setLocalSpec] = React.useState<EditSpec | null>(null)
   const [activeRegion, setActiveRegion] = React.useState(0)
   const [videoAspect, setVideoAspect] = React.useState(16 / 9)
+  const [seedingCaptions, setSeedingCaptions] = React.useState(false)
   const initializedRegions = React.useRef(false)
 
   /* The editable spec is the server's until the user touches it — then the local
@@ -177,6 +180,63 @@ export function ClipEditor({ jobId, clipId }: { jobId: string; clipId: string })
     setRegions(next)
   }
 
+  // ── Captions ──
+  const seedSegments = async (): Promise<{ startSec: number; endSec: number; text: string }[]> => {
+    const res = await utils.clips.getEditorCaptions.fetch({ organizationId, clipId })
+    return res.segments
+  }
+  const toggleCaptions = async (enabled: boolean): Promise<void> => {
+    if (!enabled) {
+      applySpec({
+        ...spec,
+        captions: spec.captions ? { ...spec.captions, enabled: false } : undefined,
+      })
+      return
+    }
+    setSeedingCaptions(true)
+    try {
+      const segments = spec.captions?.segments ?? (await seedSegments())
+      const style: CaptionStyle = spec.captions?.style ?? DEFAULT_CAPTION_STYLE
+      applySpec({ ...spec, captions: { enabled: true, style, segments } })
+    } catch {
+      toast.error('Could not load captions for this clip.')
+    } finally {
+      setSeedingCaptions(false)
+    }
+  }
+  const updateCaptionStyle = (patch: Partial<CaptionStyle>): void => {
+    if (!spec.captions) return
+    applySpec({
+      ...spec,
+      captions: { ...spec.captions, style: { ...spec.captions.style, ...patch } },
+    })
+  }
+  const updateSegmentText = (index: number, text: string): void => {
+    const caps = spec.captions
+    if (!caps?.segments) return
+    const segments = caps.segments.slice()
+    const seg = segments[index]
+    if (!seg) return
+    segments[index] = { ...seg, text }
+    applySpec({ ...spec, captions: { ...caps, segments } })
+  }
+  const resetCaptions = async (): Promise<void> => {
+    if (!spec.captions) return
+    setSeedingCaptions(true)
+    try {
+      const segments = await seedSegments()
+      applySpec({ ...spec, captions: { ...spec.captions, segments } })
+    } catch {
+      toast.error('Could not reload captions.')
+    } finally {
+      setSeedingCaptions(false)
+    }
+  }
+  const captionPreview =
+    spec.captions?.enabled && spec.captions.segments
+      ? { segments: spec.captions.segments, style: spec.captions.style }
+      : null
+
   return (
     <div className="space-y-6">
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -209,6 +269,7 @@ export function ClipEditor({ jobId, clipId }: { jobId: string; clipId: string })
             onActiveRegion={setActiveRegion}
             onRegionsChange={setRegions}
             onVideoAspect={handleVideoAspect}
+            captionPreview={captionPreview}
           />
           <p className="text-muted-foreground mt-2 max-w-xl text-xs">
             Drag the highlighted box to position the subject. Everything outside it is cropped away.
@@ -305,6 +366,16 @@ export function ClipEditor({ jobId, clipId }: { jobId: string; clipId: string })
               </div>
             </CardContent>
           </Card>
+
+          <CaptionsPanel
+            captions={spec.captions}
+            hasTranscript={data.clip.hasTranscript}
+            seeding={seedingCaptions}
+            onToggle={(v) => void toggleCaptions(v)}
+            onStyleChange={updateCaptionStyle}
+            onSegmentText={updateSegmentText}
+            onReset={() => void resetCaptions()}
+          />
 
           <Card className="glass">
             <CardHeader className="pb-3">

@@ -19,7 +19,7 @@
 export { resolveSource, resolveYoutubeSection } from './stages/source'
 export type { ResolveSourceParams, ResolveSectionParams } from './stages/source'
 export { transcribe } from './stages/transcribe'
-export { analyze, generateTitleForRange, sliceTranscriptWindow } from './stages/analyze'
+export { analyze, generateTitleForRange, sliceTranscriptWindow, sliceTranscriptWords } from './stages/analyze'
 export { cut } from './stages/cut'
 export type { OnClipReady } from './stages/cut'
 export { renderEditSpec, buildRenderFilters, OUTPUT_DIMENSIONS } from './stages/render'

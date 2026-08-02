@@ -21,7 +21,7 @@ import { mediaConfig } from '../config'
 import { createLogger } from '../lib/log'
 import { extractJson } from '../lib/json'
 import { getLLMProvider } from '../providers/llm'
-import type { Transcript, ClipRange, TranscriptSegment } from '../types'
+import type { Transcript, ClipRange, TranscriptSegment, Word } from '../types'
 
 const log = createLogger('analyze')
 
@@ -109,6 +109,27 @@ export function sliceTranscriptWindow(transcript: Transcript, startSec: number, 
     .map((w) => w.text)
     .join(' ')
     .trim()
+}
+
+/**
+ * SOURCE OF TRUTH KEYWORDS: sliceTranscriptWords, clip-relative words, caption words
+ *
+ * WHAT:  The words spoken within [startSec, endSec], shifted to CLIP-relative
+ *        seconds (0 = the clip's start). Drops words fully outside the window.
+ * WHY:   Captions burn against a clip whose timeline starts at 0; the render
+ *        worker AND the editor's caption seed reuse this ONE window-slicer so the
+ *        editable lines match exactly what gets rendered.
+ * WHERE: clip-render processor (caption words) + clips.getEditorCaptions.
+ */
+export function sliceTranscriptWords(transcript: Transcript, startSec: number, endSec: number): Word[] {
+  return transcript.words
+    .filter((w) => w.start < endSec && w.end > startSec)
+    .map((w) => ({
+      text: w.text,
+      start: Math.max(0, w.start - startSec),
+      end: Math.max(0, w.end - startSec),
+    }))
+    .filter((w) => w.end > w.start)
 }
 
 /**
