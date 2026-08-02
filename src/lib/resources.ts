@@ -254,11 +254,14 @@ export const RESOURCES = {
     audit: {
       describe: {
         create: 'Started a clip job for {output.title}',
+        addManualClip: 'Added a manual clip to job {input.id}',
         delete: 'Deleted clip job {input.id}',
       },
     },
     rateLimit: {
       create: { count: 5, window: '1 m' },
+      addManualClip: { count: 20, window: '1 m' },
+      suggestManualTitle: { count: 30, window: '1 m' },
     },
   },
 } as const satisfies Record<string, ResourceDefinition>
