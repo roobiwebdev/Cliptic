@@ -61,17 +61,12 @@ import {
   deleteObject,
   storageKeys,
 } from '@/services/storage.service'
+import { userSafeError } from '../lib/worker-error'
 
 /** Is this job flagged cancelled? Reloads the row so cancel takes effect between stages. */
 async function isCanceled(clipJobId: string): Promise<boolean> {
   const row = await prisma.clipJob.findUnique({ where: { id: clipJobId }, select: { status: true } })
   return !row || row.status === 'CANCELED'
-}
-
-/** User-safe failure message — never leak raw internals to the dashboard. */
-function userSafeError(err: unknown): string {
-  const msg = err instanceof Error ? err.message : String(err)
-  return msg.length > 300 ? `${msg.slice(0, 297)}…` : msg
 }
 
 /** Content-type from a source extension so the studio's <video> preview plays

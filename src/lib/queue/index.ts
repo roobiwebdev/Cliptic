@@ -29,6 +29,9 @@ import { getProducerConnection, isQueueConfigured } from './connection'
  */
 export const QUEUE_NAMES = {
   clipProcessing: 'clip-processing',
+  /* Editor exports — apply a ClipEdit's spec to a clip mp4 via ffmpeg. Its own
+   * queue keeps render jobs isolated from the clip pipeline (own payload/status). */
+  clipRender: 'clip-render',
 } as const
 
 export type QueueName = (typeof QUEUE_NAMES)[keyof typeof QUEUE_NAMES]
