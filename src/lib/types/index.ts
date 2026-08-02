@@ -96,6 +96,7 @@ export {
 } from './clips'
 export type {
   ClipJobPayload,
+  ClipEditRenderPayload,
   ManualRange,
   CreateClipJobValues,
   ListClipJobsValues,
