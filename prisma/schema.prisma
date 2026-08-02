@@ -193,6 +193,7 @@ model Organization {
   activityLogs      ActivityLog[]
   clipJobs          ClipJob[]
   clips             Clip[]
+  clipEdits         ClipEdit[]
 
   @@map("organization")
 }
@@ -502,8 +503,59 @@ model Clip {
 
   clipJob      ClipJob      @relation(fields: [clipJobId], references: [id], onDelete: Cascade)
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  edit         ClipEdit?
 
   @@index([clipJobId])
   @@index([organizationId])
   @@map("clip")
+}
+
+/// How a clip's editor render is progressing. DRAFT = spec saved but not yet
+/// rendered; QUEUED → RENDERING → COMPLETED; any active state can go FAILED; a
+/// queued/rendering edit can be CANCELED. The clip-render worker writes this
+/// after each step (mirrors the ClipJobStatus pattern, but scoped to a render).
+enum ClipEditStatus {
+  DRAFT
+  QUEUED
+  RENDERING
+  COMPLETED
+  FAILED
+  CANCELED
+}
+
+/// ClipEdit — a NON-DESTRUCTIVE edit of a single Clip. Holds the validated edit
+/// spec (the JSON recipe the browser Editor builds — see src/lib/types/edit-spec.ts)
+/// plus the status + output keys of the server-side render that applies it. The
+/// original Clip is never mutated; the edited output is a separate R2 object.
+///
+/// One live edit per clip in v1 (`@@unique([clipId])`) — relax to a version list
+/// later by dropping the unique + adding a label/version. `organizationId` is
+/// denormalized (like Clip) so tenant-scoped queries and signed-URL ownership
+/// checks never have to join Clip → ClipJob.
+///
+/// SOURCE OF TRUTH KEYWORD: ClipEdit
+model ClipEdit {
+  id                 String         @id @default(cuid())
+  clipId             String
+  organizationId     String
+  spec               Json // validated EditSpec — see src/lib/types/edit-spec.ts
+  status             ClipEditStatus @default(DRAFT)
+  progress           Int            @default(0) // 0–100 for the render bar
+  currentStage       String? // human label of the active render step
+  error              String? // user-safe failure message (never raw internals)
+  aspect             String? // snapshot of spec.reframe.aspect for listings
+  outputR2Key        String? // R2 key of the rendered edited mp4
+  outputThumbnailKey String? // R2 key of the edited poster image
+  outputSizeBytes    Int?
+  outputDurationSec  Float?
+  createdAt          DateTime       @default(now())
+  updatedAt          DateTime       @updatedAt
+  completedAt        DateTime?
+
+  clip         Clip         @relation(fields: [clipId], references: [id], onDelete: Cascade)
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([clipId])
+  @@index([organizationId])
+  @@map("clip_edit")
 }
