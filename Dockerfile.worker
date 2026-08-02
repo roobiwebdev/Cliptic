@@ -11,6 +11,12 @@ FROM brainicism/bgutil-ytdlp-pot-provider:latest AS potprovider
 FROM node:20-bookworm-slim
 
 # System tools the media pipeline shells out to (+ python for pip yt-dlp).
+# fontconfig + fonts give libass what it needs to BURN captions (editor render):
+#   - fonts-noto-color-emoji → emoji glyphs in captions
+#   - fonts-noto-core / fonts-dejavu-core → a clean sans fallback for any caption
+#     font family. The branded caption fonts (Inter/Montserrat/Poppins/Anton/
+#     Bebas Neue) fall back to Noto until their OFL .ttf files are dropped into
+#     /usr/share/fonts and `fc-cache`d — a drop-in follow-up, no code change.
 RUN apt-get update && apt-get install -y --no-install-recommends \
       ffmpeg \
       aria2 \
@@ -20,6 +26,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       python3-pip \
       python3-venv \
       unzip \
+      fontconfig \
+      fonts-noto-core \
+      fonts-noto-color-emoji \
+      fonts-dejavu-core \
  && rm -rf /var/lib/apt/lists/*
 
 # yt-dlp via pip (REQUIRED: the bgutil PO-token plugin only loads under a

@@ -31,6 +31,18 @@ export interface ClipJobPayload {
 }
 
 /**
+ * SOURCE OF TRUTH KEYWORDS: ClipEditRenderPayload, clip render job, editor export
+ *
+ * WHAT:  What we put on the `clip-render` queue for an editor export — just ids.
+ *        The render worker loads the full ClipEdit (spec + status) from the DB.
+ * WHERE: enqueued by clips.render; consumed by the clip-render processor.
+ */
+export interface ClipEditRenderPayload {
+  clipEditId: string
+  organizationId: string
+}
+
+/**
  * SOURCE OF TRUTH KEYWORDS: clipSourceTypeSchema, clipJobModeSchema
  *
  * WHAT:  Zod enums mirroring the Prisma ClipSourceType / ClipJobMode.
