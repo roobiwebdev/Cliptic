@@ -83,6 +83,7 @@ export function ManualClipStudio({
   const [playhead, setPlayhead] = React.useState(0)
   const [dragging, setDragging] = React.useState<null | 'start' | 'end'>(null)
   const [suggesting, setSuggesting] = React.useState(false)
+  const [videoError, setVideoError] = React.useState(false)
 
   /* Latest values for the drag listeners without re-subscribing on every tick.
    * Written in an effect (react-compiler forbids ref writes during render). */
@@ -227,8 +228,14 @@ export function ManualClipStudio({
           controls
           preload="metadata"
           src={sourcePreviewUrl}
+          onError={() => setVideoError(true)}
           onTimeUpdate={(e) => setPlayhead(e.currentTarget.currentTime)}
         />
+        {videoError ? (
+          <p className="text-muted-foreground text-xs">
+            Couldn&apos;t load the preview — you can still set the times below and add the clip.
+          </p>
+        ) : null}
 
         {/* Timeline: selected range + draggable in/out handles + playhead. */}
         <div
