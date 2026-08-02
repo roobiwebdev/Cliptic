@@ -144,21 +144,34 @@ export async function deleteObject(key: string): Promise<void> {
 }
 
 /**
- * SOURCE OF TRUTH KEYWORDS: getSignedDownloadUrl
+ * SOURCE OF TRUTH KEYWORDS: getSignedDownloadUrl, ResponseContentDisposition,
+ *   attachment, download filename, presigned GET
  *
- * WHAT:  Short-lived presigned GET URL for a private object.
+ * WHAT:  Short-lived presigned GET URL for a private object. When `filename` is
+ *        given, the URL carries `Content-Disposition: attachment; filename=…` so
+ *        the browser SAVES the file (with that name) instead of previewing it.
  * WHY:   The bucket is private; the clips router mints these only after checking
- *        the requesting org owns the object.
- * WHERE: clips.getDownloadUrl.
+ *        the requesting org owns the object. The response header is authoritative
+ *        even cross-origin — where the `<a download>` attribute is ignored — so
+ *        this is what actually makes "Download" save rather than open. Omit
+ *        `filename` for inline preview URLs (the <video> element).
+ * WHERE: clips.get (mints one inline preview URL + one attachment download URL).
  */
 export async function getSignedDownloadUrl(
   key: string,
-  expiresInSeconds: number = DEFAULT_DOWNLOAD_TTL_SEC
+  expiresInSeconds: number = DEFAULT_DOWNLOAD_TTL_SEC,
+  filename?: string
 ): Promise<string> {
   const client = requireClient()
-  return getSignedUrl(client, new GetObjectCommand({ Bucket: R2_BUCKET, Key: key }), {
-    expiresIn: expiresInSeconds,
-  })
+  return getSignedUrl(
+    client,
+    new GetObjectCommand({
+      Bucket: R2_BUCKET,
+      Key: key,
+      ...(filename ? { ResponseContentDisposition: `attachment; filename="${filename}"` } : {}),
+    }),
+    { expiresIn: expiresInSeconds }
+  )
 }
 
 /**
