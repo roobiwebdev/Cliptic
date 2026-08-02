@@ -95,6 +95,48 @@ function normalizeClip(raw: z.infer<typeof llmClipSchema>, duration: number): Cl
   return clip
 }
 
+/**
+ * SOURCE OF TRUTH KEYWORDS: sliceTranscriptWindow, transcript window, window text
+ *
+ * WHAT:  The words spoken within [startSec, endSec], joined into text.
+ * WHY:   Feeds a focused title for a USER-picked manual clip window — reuse the
+ *        already-transcribed words instead of re-processing.
+ * WHERE: generateTitleForRange; the manual-clip worker path + clips.suggestManualTitle.
+ */
+export function sliceTranscriptWindow(transcript: Transcript, startSec: number, endSec: number): string {
+  return transcript.words
+    .filter((w) => w.start < endSec && w.end > startSec)
+    .map((w) => w.text)
+    .join(' ')
+    .trim()
+}
+
+/**
+ * SOURCE OF TRUTH KEYWORDS: generateTitleForRange, manual clip title, catchy title
+ *
+ * WHAT:  A short, catchy title for a clip from its transcript text (one cheap LLM call).
+ * WHY:   Manual clips (and future renames) need an AI title WITHOUT the full analyze
+ *        pass; extracted here so the worker and the API share one implementation and
+ *        honor the same swappable LLM provider. Empty text ⇒ empty title (caller
+ *        falls back to a timestamp default).
+ * WHERE: Manual-clip worker path; clips.suggestManualTitle.
+ */
+export async function generateTitleForRange(windowText: string): Promise<string> {
+  const text = windowText.trim()
+  if (!text) return ''
+  const provider = getLLMProvider()
+  const system = 'You write short, punchy titles for short-form video clips.'
+  const user = [
+    'Write ONE short, catchy title (max ~8 words) for a short-form clip whose transcript is below.',
+    'No quotes, no emojis, no hashtags. Return ONLY the title text.',
+    '',
+    'Transcript:',
+    text.slice(0, 4000),
+  ].join('\n')
+  const raw = await provider.complete({ system, user, json: false, maxTokens: 40 })
+  return raw.trim().replace(/^["']+|["']+$/g, '').slice(0, 120)
+}
+
 export async function analyze(transcript: Transcript): Promise<ClipRange[]> {
   const provider = getLLMProvider()
   log(`selecting clips with "${provider.name}" (${mediaConfig.clips.count} target)`)

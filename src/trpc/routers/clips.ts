@@ -30,12 +30,20 @@ import {
   clipJobRefSchema,
   listClipJobsSchema,
   createUploadUrlSchema,
+  addManualClipSchema,
+  suggestManualTitleSchema,
+  parseManualRanges,
   type ClipJobPayload,
+  type ManualRange,
 } from '@/lib/types'
 import { getClipPlanLimits } from '@/lib/config/clip-limits'
 import { getOrganizationTier } from '@/lib/feature-gate'
 import { enqueue, getQueue, QUEUE_NAMES } from '@/lib/queue'
 import { slugify } from '@/lib/utils'
+/* Import the title unit DIRECTLY from the analyze stage (not the media-pipeline
+ * barrel) so the router graph never pulls in the ffmpeg/yt-dlp stages. */
+import { generateTitleForRange, sliceTranscriptWindow } from '@/lib/media-pipeline/stages/analyze'
+import type { Transcript } from '@/lib/media-pipeline/types'
 import * as clipsService from '@/services/clips.service'
 import * as storage from '@/services/storage.service'
 
@@ -116,11 +124,30 @@ export const clipsRouter = createTRPCRouter({
         assertSafeSourceUrl(input.url)
       }
 
+      /* MANUAL: the worker downloads ONLY this slice and cuts it. Bound the length
+       * by the plan's per-video minutes so a "clip" can't be a whole long video. */
+      if (input.mode === 'MANUAL' && input.manualRange) {
+        const lengthSec = input.manualRange.endSec - input.manualRange.startSec
+        const maxSec = Number.isFinite(caps.maxVideoMinutes) ? caps.maxVideoMinutes * 60 : Infinity
+        if (lengthSec > maxSec) {
+          throw new TRPCError({
+            code: 'BAD_REQUEST',
+            message: `A single clip can be at most ${caps.maxVideoMinutes} minutes on your plan.`,
+          })
+        }
+      }
+
       const job = await ctx.db.clipJob.create({
         data: {
           organizationId: input.organizationId,
           userId: ctx.user.id,
           sourceType: input.sourceType,
+          /* MANUAL cuts only the user's exact range (stored below); the worker
+           * skips download-whole/transcribe/analyze. */
+          mode: input.mode,
+          ...(input.mode === 'MANUAL' && input.manualRange
+            ? { manualRanges: [input.manualRange] }
+            : {}),
           sourceUrl: input.sourceType === 'YOUTUBE' ? (input.url ?? null) : null,
           uploadKey: input.sourceType === 'UPLOAD' ? (input.uploadKey ?? null) : null,
         },
@@ -167,7 +194,12 @@ export const clipsRouter = createTRPCRouter({
           }
         })
       )
-      return { ...job, clips }
+      /* Inline preview of the persisted 720p source — powers the manual-clip
+       * studio's scrubber (frame-accurate to what the worker cuts). */
+      const sourcePreviewUrl = job.sourceKey
+        ? await storage.getSignedDownloadUrl(job.sourceKey, SIGNED_URL_TTL_SEC)
+        : null
+      return { ...job, clips, sourcePreviewUrl }
     }),
 
   /* Stop a running/queued job. Owner-authority gate reuses clips:delete. */
@@ -204,6 +236,8 @@ export const clipsRouter = createTRPCRouter({
         .deletePrefix(storage.storageKeys.clipJobPrefix(input.organizationId, job.id))
         .catch(() => {})
       if (job.uploadKey) await storage.deleteObject(job.uploadKey).catch(() => {})
+      /* The persisted source lives under the separate `sources/` prefix. */
+      if (job.sourceKey) await storage.deleteObject(job.sourceKey).catch(() => {})
 
       return ctx.db.clipJob.delete({ where: { id: job.id } })
     }),
@@ -219,5 +253,70 @@ export const clipsRouter = createTRPCRouter({
       )
       const uploadUrl = await storage.getSignedUploadUrl(key, input.contentType, 600)
       return { uploadUrl, uploadKey: key }
+    }),
+
+  /* Suggest an AI title for a user-picked window. Reuses the job's CACHED
+   * transcript (instant, no re-processing); empty when not yet transcribed. */
+  suggestManualTitle: protectedProcedure({ requirePermission: permissions.CLIPS_READ })
+    .input(suggestManualTitleSchema)
+    .query(async ({ ctx, input }) => {
+      const job = await ctx.db.clipJob.findFirst({
+        where: { id: input.id, organizationId: input.organizationId },
+        select: { transcriptKey: true },
+      })
+      if (!job) throw new TRPCError({ code: 'NOT_FOUND', message: 'Clip job not found.' })
+      if (!job.transcriptKey) return { title: '' }
+
+      const transcript = JSON.parse(
+        (await storage.downloadBuffer(job.transcriptKey)).toString('utf8')
+      ) as Transcript
+      const title = await generateTitleForRange(
+        sliceTranscriptWindow(transcript, input.startSec, input.endSec)
+      )
+      return { title }
+    }),
+
+  /* Add ONE manual clip to an existing job. Named `addManualClip` (not `create`)
+   * so it's gated by clips:create + rate limit but does NOT consume a monthly
+   * video — the video was already paid for. The worker reuses the persisted
+   * source (near-instant) and appends a MANUAL clip. */
+  addManualClip: protectedProcedure({ requirePermission: permissions.CLIPS_CREATE })
+    .input(addManualClipSchema)
+    .mutation(async ({ ctx, input }) => {
+      const job = await ctx.db.clipJob.findFirst({
+        where: { id: input.id, organizationId: input.organizationId },
+      })
+      if (!job) throw new TRPCError({ code: 'NOT_FOUND', message: 'Clip job not found.' })
+      if (!job.sourceKey) {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: "This video's source has expired. Reprocess it to add more clips.",
+        })
+      }
+      if (job.durationSec && input.endSec > job.durationSec + 0.5) {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'That range is past the end of the video.' })
+      }
+
+      /* Queue the pending range on the job (append to any already waiting) and
+       * enqueue a manual cut with a UNIQUE jobId so it isn't deduped against the
+       * original job. delay:1000 lets this tx commit before the worker reads. */
+      const range: ManualRange = {
+        startSec: input.startSec,
+        endSec: input.endSec,
+        ...(input.title ? { title: input.title } : {}),
+      }
+      const nextRanges = [...parseManualRanges(job.manualRanges), range]
+      await ctx.db.clipJob.update({
+        where: { id: job.id },
+        data: { manualRanges: nextRanges },
+      })
+      await enqueue(
+        QUEUE_NAMES.clipProcessing,
+        'manual',
+        { clipJobId: job.id, organizationId: input.organizationId } satisfies ClipJobPayload,
+        { jobId: `${job.id}:manual:${nanoid()}`, delay: 1000 }
+      )
+
+      return { ok: true }
     }),
 })

@@ -82,17 +82,25 @@ export type {
 } from './billing'
 export {
   clipSourceTypeSchema,
+  clipJobModeSchema,
+  manualRangeSchema,
   createClipJobSchema,
   clipJobRefSchema,
   listClipJobsSchema,
   createUploadUrlSchema,
+  addManualClipSchema,
+  suggestManualTitleSchema,
   CLIP_STAGE_PROGRESS,
   parseClipJobTimings,
+  parseManualRanges,
 } from './clips'
 export type {
   ClipJobPayload,
+  ManualRange,
   CreateClipJobValues,
   ListClipJobsValues,
   CreateUploadUrlValues,
+  AddManualClipValues,
+  SuggestManualTitleValues,
   ClipJobTimings,
 } from './clips'
