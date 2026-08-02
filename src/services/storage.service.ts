@@ -9,7 +9,7 @@
  * SOURCE OF TRUTH KEYWORDS: storageKeys, putObject, getSignedDownloadUrl,
  *   getSignedUploadUrl, deletePrefix, uploadFile, Storage Engine, presigned URL,
  *   clipJobPrefix, clipObjectKey, thumbnailObjectKey, transcriptObjectKey,
- *   sourceUploadKey
+ *   sourceUploadKey, sourceKey
  *
  * WHAT:  The Storage Engine's data-access layer — tenant-prefixed key builders
  *        plus thin R2 operations (put, presign get/put, delete-by-prefix).
@@ -48,6 +48,11 @@ export const storageKeys = {
     `orgs/${organizationId}/clip-jobs/${clipJobId}/source/upload.${ext}`,
   transcriptKey: (organizationId: string, clipJobId: string): string =>
     `orgs/${organizationId}/clip-jobs/${clipJobId}/transcript.json`,
+  /** Persisted 720p source, kept for near-instant manual re-cuts. Lives under a
+   *  distinct top-level `sources/` prefix so it can carry its OWN (shorter)
+   *  retention via an R2 lifecycle rule (CLIP_SOURCE_RETENTION_DAYS). */
+  sourceKey: (organizationId: string, clipJobId: string, ext = 'mp4'): string =>
+    `sources/${organizationId}/${clipJobId}/source.${ext}`,
   clipKey: (organizationId: string, clipJobId: string, index: number): string =>
     `orgs/${organizationId}/clip-jobs/${clipJobId}/clips/clip_${String(index).padStart(2, '0')}.mp4`,
   thumbnailKey: (organizationId: string, clipJobId: string, index: number): string =>
