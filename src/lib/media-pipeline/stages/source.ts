@@ -145,6 +145,70 @@ async function resolveYoutube(params: ResolveSourceParams): Promise<Source> {
   return { videoId, sourceType: 'youtube', isLocal: true, videoSource: videoPath, audioPath, scratchDir }
 }
 
+/**
+ * SOURCE OF TRUTH KEYWORDS: resolveYoutubeSection, download-sections, manual clip
+ *
+ * WHAT:  Download ONLY the [startSec, endSec] slice of a YouTube video (yt-dlp
+ *        --download-sections via the ffmpeg downloader, keyframe-exact), extract
+ *        its audio, and return a Source whose file IS that section (timeline 0..len).
+ * WHY:   Manual clips are a precise short range — fetching just that slice is fast
+ *        and cheap (no full-video download / transcribe / analyze). The cut stage
+ *        then re-encodes [0, len] from this local section.
+ * WHERE: The worker's manual-cut path (YouTube, no persisted source).
+ */
+export interface ResolveSectionParams {
+  url: string
+  startSec: number
+  endSec: number
+  scratchDir: string
+  onProgress?: (pct: number) => void
+}
+
+export async function resolveYoutubeSection(params: ResolveSectionParams): Promise<Source> {
+  const { url, scratchDir } = params
+  const bin = mediaConfig.download.ytdlpBin
+  const maxHeight = mediaConfig.download.maxHeight
+  const start = Math.max(0, params.startSec)
+  const end = Math.max(start + 0.5, params.endSec)
+  const videoPath = path.join(scratchDir, 'section.mp4')
+  const audioPath = path.join(scratchDir, 'section-audio.mp3')
+
+  log(`downloading section ${start.toFixed(1)}–${end.toFixed(1)}s (≤${maxHeight}p): ${url}`)
+  await runWithProgress(
+    bin,
+    [
+      '-f',
+      `bv*[height<=${maxHeight}][ext=mp4]+ba[ext=m4a]/b[height<=${maxHeight}][ext=mp4]/b[height<=${maxHeight}]/b`,
+      /* ffmpeg downloader fetches only the section's byte ranges; force-keyframes
+       * makes the cut boundaries exact (slight re-encode, cheap for a short clip). */
+      '--downloader',
+      'ffmpeg',
+      '--download-sections',
+      `*${start.toFixed(2)}-${end.toFixed(2)}`,
+      '--force-keyframes-at-cuts',
+      '--merge-output-format',
+      'mp4',
+      '--newline',
+      '--retries',
+      '10',
+      ...ytdlpAuthArgs(),
+      '-o',
+      videoPath,
+      url,
+    ],
+    (line) => {
+      const match = line.match(/\[download\]\s+([\d.]+)%/)
+      if (match?.[1] && params.onProgress) params.onProgress(Number(match[1]))
+    }
+  )
+
+  /* Section audio (short → fast) so the manual clip's AI title can be transcribed. */
+  await extractAudioForTranscription(videoPath, audioPath)
+
+  const videoId = 'section-' + createHash('sha256').update(`${url}:${start}:${end}`).digest('hex').slice(0, 10)
+  return { videoId, sourceType: 'youtube', isLocal: true, videoSource: videoPath, audioPath, scratchDir }
+}
+
 /** Uploaded file (already local on the worker): extract audio, cut from it directly. */
 async function resolveUpload(params: ResolveSourceParams): Promise<Source> {
   const { localPath, scratchDir } = params

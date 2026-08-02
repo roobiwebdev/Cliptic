@@ -48,12 +48,13 @@ import { Progress } from '@/components/ui/progress'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import {
-  STAGE_STEPS,
+  stepsForMode,
   isActiveStatus,
   statusBadgeVariant,
   statusLabel,
   type ClipItem,
 } from '../../_components/clip-status'
+import { ManualClipStudio } from './manual-clip-studio'
 
 /* Soft ceiling the animated bar may "creep" to within each stage (just short of
  * the next real milestone) so a static server value never looks stuck. */
@@ -216,7 +217,8 @@ export function JobDetail({ jobId }: { jobId: string }) {
     )
   }
 
-  const currentStageIndex = STAGE_STEPS.findIndex((step) => step.key === job.status)
+  const steps = stepsForMode(job.mode)
+  const currentStageIndex = steps.findIndex((step) => step.key === job.status)
   const heading = job.title ?? job.sourceUrl ?? 'Uploaded video'
 
   return (
@@ -282,7 +284,7 @@ export function JobDetail({ jobId }: { jobId: string }) {
             <Progress value={displayPct} />
 
             <ul className="space-y-3 pt-1">
-              {STAGE_STEPS.map((step, i) => {
+              {steps.map((step, i) => {
                 const done = currentStageIndex > i
                 const isCurrent = currentStageIndex === i
                 return (
@@ -357,6 +359,17 @@ export function JobDetail({ jobId }: { jobId: string }) {
           })()
         : null}
 
+      {/* Manual studio — available on any completed job whose source is still
+          persisted; the primary surface for MANUAL-mode jobs. */}
+      {job.status === 'COMPLETED' && job.sourcePreviewUrl ? (
+        <ManualClipStudio
+          jobId={jobId}
+          organizationId={organizationId}
+          sourcePreviewUrl={job.sourcePreviewUrl}
+          durationSec={job.durationSec ?? 0}
+        />
+      ) : null}
+
       {job.clips.length > 0 ? (
         <div className="space-y-4">
           <div className="flex items-center justify-between">
@@ -378,7 +391,7 @@ export function JobDetail({ jobId }: { jobId: string }) {
             ))}
           </div>
         </div>
-      ) : job.status === 'COMPLETED' ? (
+      ) : job.status === 'COMPLETED' && !job.sourcePreviewUrl ? (
         <p className="text-muted-foreground text-sm">No clips were produced for this video.</p>
       ) : null}
     </div>
@@ -419,7 +432,10 @@ function ClipCard({ clip }: { clip: ClipItem }) {
       <CardHeader>
         <div className="flex items-start justify-between gap-2">
           <CardTitle className="text-sm">{clip.title ?? `Clip ${clip.index}`}</CardTitle>
-          {typeof clip.score === 'number' ? <Badge variant="secondary">{clip.score}</Badge> : null}
+          <div className="flex shrink-0 items-center gap-1.5">
+            {clip.source === 'MANUAL' ? <Badge variant="outline">Manual</Badge> : null}
+            {typeof clip.score === 'number' ? <Badge variant="secondary">{clip.score}</Badge> : null}
+          </div>
         </div>
       </CardHeader>
       <CardContent className="space-y-3">
