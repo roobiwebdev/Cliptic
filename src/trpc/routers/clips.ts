@@ -32,10 +32,16 @@ import {
   createUploadUrlSchema,
   addManualClipSchema,
   suggestManualTitleSchema,
+  editorClipRefSchema,
+  saveEditSchema,
   parseManualRanges,
+  createDefaultEditSpec,
+  parseEditSpec,
   type ClipJobPayload,
+  type ClipEditRenderPayload,
   type ManualRange,
 } from '@/lib/types'
+import type { Prisma } from '@/generated/prisma'
 import { getClipPlanLimits } from '@/lib/config/clip-limits'
 import { getOrganizationTier } from '@/lib/feature-gate'
 import { enqueue, getQueue, QUEUE_NAMES } from '@/lib/queue'
@@ -45,6 +51,7 @@ import { slugify } from '@/lib/utils'
 import { generateTitleForRange, sliceTranscriptWindow } from '@/lib/media-pipeline/stages/analyze'
 import type { Transcript } from '@/lib/media-pipeline/types'
 import * as clipsService from '@/services/clips.service'
+import * as clipEditService from '@/services/clip-edit.service'
 import * as storage from '@/services/storage.service'
 
 const TERMINAL_STATUSES = ['COMPLETED', 'FAILED', 'CANCELED']
@@ -318,5 +325,179 @@ export const clipsRouter = createTRPCRouter({
       )
 
       return { ok: true }
+    }),
+
+  /* ── Editor: reframe + burned captions. A ClipEdit holds the spec + render; the
+   *    original Clip is never mutated. See src/lib/types/edit-spec.ts. ────────── */
+
+  /* Load a clip for the Editor — its saved edit (or a default draft spec) + signed
+   * preview/download URLs. Light enough to poll while an export renders. */
+  getEditor: protectedProcedure({ requirePermission: permissions.CLIPS_READ })
+    .input(editorClipRefSchema)
+    .query(async ({ ctx, input }) => {
+      const clip = await clipEditService.getEditorClip(ctx.db, input.organizationId, input.clipId)
+      if (!clip) throw new TRPCError({ code: 'NOT_FOUND', message: 'Clip not found.' })
+
+      const spec = (clip.edit && parseEditSpec(clip.edit.spec)) || createDefaultEditSpec()
+
+      const clipPreviewUrl = await storage.getSignedDownloadUrl(clip.r2Key, SIGNED_URL_TTL_SEC)
+      let editedPreviewUrl: string | null = null
+      let editedDownloadUrl: string | null = null
+      if (clip.edit?.outputR2Key) {
+        const filename = `${slugify(clip.title ?? '', `clip-${clip.index}`)}-edited.mp4`
+        editedPreviewUrl = await storage.getSignedDownloadUrl(clip.edit.outputR2Key, SIGNED_URL_TTL_SEC)
+        editedDownloadUrl = await storage.getSignedDownloadUrl(
+          clip.edit.outputR2Key,
+          SIGNED_URL_TTL_SEC,
+          filename
+        )
+      }
+
+      return {
+        clip: {
+          id: clip.id,
+          index: clip.index,
+          title: clip.title,
+          source: clip.source,
+          startSec: clip.startSec,
+          endSec: clip.endSec,
+          durationSec: clip.durationSec,
+          hasTranscript: Boolean(clip.clipJob.transcriptKey),
+        },
+        edit: clip.edit
+          ? {
+              id: clip.edit.id,
+              status: clip.edit.status,
+              progress: clip.edit.progress,
+              currentStage: clip.edit.currentStage,
+              error: clip.edit.error,
+              aspect: clip.edit.aspect,
+              outputDurationSec: clip.edit.outputDurationSec,
+              outputSizeBytes: clip.edit.outputSizeBytes,
+              updatedAt: clip.edit.updatedAt,
+              completedAt: clip.edit.completedAt,
+            }
+          : null,
+        spec,
+        clipPreviewUrl,
+        editedPreviewUrl,
+        editedDownloadUrl,
+      }
+    }),
+
+  /* Save the draft edit spec (debounced autosave). Gated by clips:update; not
+   * audited (draft writes are frequent) and consumes no quota. */
+  saveEdit: protectedProcedure({ requirePermission: permissions.CLIPS_UPDATE, audit: false })
+    .input(saveEditSchema)
+    .mutation(async ({ ctx, input }) => {
+      const clip = await ctx.db.clip.findFirst({
+        where: { id: input.clipId, organizationId: input.organizationId },
+        select: { id: true },
+      })
+      if (!clip) throw new TRPCError({ code: 'NOT_FOUND', message: 'Clip not found.' })
+
+      /* Prisma Json boundary — the spec is Zod-validated by saveEditSchema above
+       * (the same documented cast the worker uses for ClipJob.timings). */
+      const spec = input.spec as Prisma.InputJsonValue
+      await ctx.db.clipEdit.upsert({
+        where: { clipId: input.clipId },
+        create: {
+          clipId: input.clipId,
+          organizationId: input.organizationId,
+          spec,
+          status: 'DRAFT',
+          aspect: input.spec.reframe.aspect,
+        },
+        update: { spec, status: 'DRAFT', aspect: input.spec.reframe.aspect, error: null },
+      })
+      return { ok: true }
+    }),
+
+  /* Export: persist the spec and enqueue a server render. Gated by clips:update +
+   * the per-plan concurrent-render cap + the registry `render` rate-limit; audited
+   * as `render`. Re-rendering an existing clip does NOT consume a monthly video. */
+  render: protectedProcedure({ requirePermission: permissions.CLIPS_UPDATE })
+    .input(saveEditSchema)
+    .mutation(async ({ ctx, input }) => {
+      const clip = await ctx.db.clip.findFirst({
+        where: { id: input.clipId, organizationId: input.organizationId },
+        select: { id: true },
+      })
+      if (!clip) throw new TRPCError({ code: 'NOT_FOUND', message: 'Clip not found.' })
+
+      const existing = await ctx.db.clipEdit.findUnique({
+        where: { clipId: input.clipId },
+        select: { status: true },
+      })
+      if (existing && (existing.status === 'QUEUED' || existing.status === 'RENDERING')) {
+        throw new TRPCError({
+          code: 'CONFLICT',
+          message: 'An export is already in progress for this clip.',
+        })
+      }
+
+      const caps = getClipPlanLimits((await getOrganizationTier(input.organizationId)).tier)
+      const active = await clipEditService.countActiveRenders(ctx.db, input.organizationId)
+      if (active >= caps.maxConcurrentRenders) {
+        throw new TRPCError({
+          code: 'TOO_MANY_REQUESTS',
+          message: `Your plan allows ${caps.maxConcurrentRenders} export(s) at once. Let one finish, or upgrade for more.`,
+        })
+      }
+
+      const spec = input.spec as Prisma.InputJsonValue
+      const edit = await ctx.db.clipEdit.upsert({
+        where: { clipId: input.clipId },
+        create: {
+          clipId: input.clipId,
+          organizationId: input.organizationId,
+          spec,
+          status: 'QUEUED',
+          currentStage: 'Queued',
+          aspect: input.spec.reframe.aspect,
+        },
+        update: {
+          spec,
+          status: 'QUEUED',
+          progress: 0,
+          currentStage: 'Queued',
+          error: null,
+          aspect: input.spec.reframe.aspect,
+          outputR2Key: null,
+          outputThumbnailKey: null,
+          outputSizeBytes: null,
+          outputDurationSec: null,
+          completedAt: null,
+        },
+      })
+
+      /* Unique jobId (not deduped) so a re-export always runs; delay lets this tx
+       * commit before the worker reads the row. */
+      await enqueue(
+        QUEUE_NAMES.clipRender,
+        'render',
+        { clipEditId: edit.id, organizationId: input.organizationId } satisfies ClipEditRenderPayload,
+        { jobId: `render:${edit.id}:${nanoid()}`, delay: 500 }
+      )
+
+      return { id: edit.id, status: edit.status }
+    }),
+
+  /* Cancel an in-flight export. The render worker checks this CANCELED status
+   * between steps (and no-ops if it hasn't started), so no queue removal needed. */
+  cancelRender: protectedProcedure({ requirePermission: permissions.CLIPS_UPDATE, audit: false })
+    .input(editorClipRefSchema)
+    .mutation(async ({ ctx, input }) => {
+      const edit = await ctx.db.clipEdit.findFirst({
+        where: { clipId: input.clipId, organizationId: input.organizationId },
+      })
+      if (!edit) throw new TRPCError({ code: 'NOT_FOUND', message: 'No export to cancel.' })
+      if (edit.status !== 'QUEUED' && edit.status !== 'RENDERING') {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'This export has already finished.' })
+      }
+      return ctx.db.clipEdit.update({
+        where: { id: edit.id },
+        data: { status: 'CANCELED', currentStage: 'Canceled' },
+      })
     }),
 })

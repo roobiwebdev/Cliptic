@@ -202,3 +202,23 @@ export function parseEditSpec(value: unknown): EditSpec | null {
   const result = editSpecSchema.safeParse(value)
   return result.success ? result.data : null
 }
+
+/* ── Editor tRPC input contracts ─────────────────────────────────────────── */
+
+/**
+ * SOURCE OF TRUTH KEYWORDS: editorClipRefSchema, saveEditSchema, SaveEditValues,
+ *   EditorClipRefValues
+ *
+ * WHAT:  Inputs for the editor procedures — reference a clip by (org, clipId),
+ *        and for save/render carry the validated spec (untrusted client → the
+ *        spec is re-validated server-side here).
+ * WHERE: clips.getEditor / saveEdit / render / cancelRender (src/trpc/routers/clips.ts).
+ */
+export const editorClipRefSchema = z.object({
+  organizationId: z.string().min(1),
+  clipId: z.string().min(1),
+})
+export const saveEditSchema = editorClipRefSchema.extend({ spec: editSpecSchema })
+
+export type EditorClipRefValues = z.infer<typeof editorClipRefSchema>
+export type SaveEditValues = z.infer<typeof saveEditSchema>
