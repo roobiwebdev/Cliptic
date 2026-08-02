@@ -54,6 +54,7 @@ import {
   statusLabel,
   type ClipItem,
 } from '../../_components/clip-status'
+import { ManualClipStudio } from './manual-clip-studio'
 
 /* Soft ceiling the animated bar may "creep" to within each stage (just short of
  * the next real milestone) so a static server value never looks stuck. */
@@ -357,6 +358,17 @@ export function JobDetail({ jobId }: { jobId: string }) {
           })()
         : null}
 
+      {/* Manual studio — available on any completed job whose source is still
+          persisted; the primary surface for MANUAL-mode jobs. */}
+      {job.status === 'COMPLETED' && job.sourcePreviewUrl ? (
+        <ManualClipStudio
+          jobId={jobId}
+          organizationId={organizationId}
+          sourcePreviewUrl={job.sourcePreviewUrl}
+          durationSec={job.durationSec ?? 0}
+        />
+      ) : null}
+
       {job.clips.length > 0 ? (
         <div className="space-y-4">
           <div className="flex items-center justify-between">
@@ -378,7 +390,7 @@ export function JobDetail({ jobId }: { jobId: string }) {
             ))}
           </div>
         </div>
-      ) : job.status === 'COMPLETED' ? (
+      ) : job.status === 'COMPLETED' && !job.sourcePreviewUrl ? (
         <p className="text-muted-foreground text-sm">No clips were produced for this video.</p>
       ) : null}
     </div>
@@ -419,7 +431,10 @@ function ClipCard({ clip }: { clip: ClipItem }) {
       <CardHeader>
         <div className="flex items-start justify-between gap-2">
           <CardTitle className="text-sm">{clip.title ?? `Clip ${clip.index}`}</CardTitle>
-          {typeof clip.score === 'number' ? <Badge variant="secondary">{clip.score}</Badge> : null}
+          <div className="flex shrink-0 items-center gap-1.5">
+            {clip.source === 'MANUAL' ? <Badge variant="outline">Manual</Badge> : null}
+            {typeof clip.score === 'number' ? <Badge variant="secondary">{clip.score}</Badge> : null}
+          </div>
         </div>
       </CardHeader>
       <CardContent className="space-y-3">

@@ -178,7 +178,12 @@ export const clipsRouter = createTRPCRouter({
           }
         })
       )
-      return { ...job, clips }
+      /* Inline preview of the persisted 720p source — powers the manual-clip
+       * studio's scrubber (frame-accurate to what the worker cuts). */
+      const sourcePreviewUrl = job.sourceKey
+        ? await storage.getSignedDownloadUrl(job.sourceKey, SIGNED_URL_TTL_SEC)
+        : null
+      return { ...job, clips, sourcePreviewUrl }
     }),
 
   /* Stop a running/queued job. Owner-authority gate reuses clips:delete. */
