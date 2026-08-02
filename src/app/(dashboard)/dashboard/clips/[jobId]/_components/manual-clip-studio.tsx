@@ -26,26 +26,11 @@ import { toast } from 'sonner'
 import { Loader2, Plus, Scissors, Sparkles } from 'lucide-react'
 
 import { trpc } from '@/trpc/react-provider'
-import { cn } from '@/lib/utils'
+import { cn, formatClock, parseClock } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-
-/** seconds → "M:SS" */
-function formatClock(totalSec: number): string {
-  const s = Math.max(0, Math.round(totalSec))
-  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`
-}
-
-/** "M:SS" | "SS" | "MM:SS" → seconds, or null when unparseable. */
-function parseClock(raw: string): number | null {
-  const value = raw.trim()
-  if (/^\d+$/.test(value)) return Number(value)
-  const m = value.match(/^(\d+):([0-5]?\d)$/)
-  if (!m) return null
-  return Number(m[1]) * 60 + Number(m[2])
-}
 
 function round1(n: number): number {
   return Math.round(n * 10) / 10
