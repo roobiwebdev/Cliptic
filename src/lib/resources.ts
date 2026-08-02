@@ -238,7 +238,9 @@ export const RESOURCES = {
   clips: {
     name: 'Clips',
     description: 'Turn long videos into AI-selected short clips',
-    permissions: ['create', 'read', 'delete'],
+    /* `update` gates the Editor (save an edit spec + export a render) — see
+     * clips.saveEdit / clips.render. Auto-derives CLIPS_UPDATE + owner grant. */
+    permissions: ['create', 'read', 'update', 'delete'],
     limit: {
       perPlan: { free: 3, starter: 30, pro: 150, enterprise: 'unlimited', portal: 'unlimited' },
       upgradeMessage: 'Upgrade to {nextPlan} to process more videos this month',
@@ -256,12 +258,18 @@ export const RESOURCES = {
         create: 'Started a clip job for {output.title}',
         addManualClip: 'Added a manual clip to job {input.id}',
         delete: 'Deleted clip job {input.id}',
+        /* Editor export. `render` is a single lowercase action so it matches the
+         * factory's lowercased pathAction lookup (see protectedProcedure §8). */
+        render: 'Exported an edited clip {input.clipId}',
       },
     },
     rateLimit: {
       create: { count: 5, window: '1 m' },
       addManualClip: { count: 20, window: '1 m' },
       suggestManualTitle: { count: 30, window: '1 m' },
+      /* Editor export = a server render job; cap bursts on top of the per-plan
+       * concurrent-render cap (src/lib/config/clip-limits.ts). */
+      render: { count: 10, window: '1 m' },
     },
   },
 } as const satisfies Record<string, ResourceDefinition>
