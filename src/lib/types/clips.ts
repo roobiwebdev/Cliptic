@@ -31,11 +31,35 @@ export interface ClipJobPayload {
 }
 
 /**
- * SOURCE OF TRUTH KEYWORDS: clipSourceTypeSchema
+ * SOURCE OF TRUTH KEYWORDS: clipSourceTypeSchema, clipJobModeSchema
  *
- * WHAT:  Zod enum mirroring the Prisma ClipSourceType.
+ * WHAT:  Zod enums mirroring the Prisma ClipSourceType / ClipJobMode.
  */
 export const clipSourceTypeSchema = z.enum(['YOUTUBE', 'UPLOAD'])
+export const clipJobModeSchema = z.enum(['AUTO', 'MANUAL'])
+
+/**
+ * SOURCE OF TRUTH KEYWORDS: ManualRange, manualRangeSchema, manual clip range
+ *
+ * WHAT:  A user-picked clip window (seconds) with an optional title. The worker
+ *        turns each into a `ClipRange` and cuts it EXACTLY (no silence-snapping).
+ * WHY:   The single shape shared by the create payload, the add-manual-clip
+ *        mutation, and the `ClipJob.manualRanges` JSON column. Upper bounds
+ *        (≤ video duration) are enforced in the router where duration is known.
+ * WHERE: clips.create (mode=MANUAL) / clips.addManualClip; worker manual path.
+ */
+export const manualRangeSchema = z
+  .object({
+    startSec: z.number().min(0),
+    endSec: z.number().positive(),
+    title: z.string().trim().max(120).optional(),
+  })
+  .refine((r) => r.endSec - r.startSec >= 1, {
+    message: 'A clip must be at least 1 second long.',
+    path: ['endSec'],
+  })
+
+export type ManualRange = z.infer<typeof manualRangeSchema>
 
 /**
  * SOURCE OF TRUTH KEYWORDS: createClipJobSchema, CreateClipJobValues
@@ -48,6 +72,9 @@ export const createClipJobSchema = z
   .object({
     organizationId: z.string().min(1),
     sourceType: clipSourceTypeSchema,
+    /* AUTO (default) = the LLM picks clips; MANUAL = ingest the source and leave
+     * clip-picking to the detail studio (worker skips analyze/cut). */
+    mode: clipJobModeSchema.default('AUTO'),
     url: z.string().url().optional(),
     uploadKey: z.string().min(1).optional(),
   })
@@ -107,6 +134,39 @@ export type ListClipJobsValues = z.infer<typeof listClipJobsSchema>
 export type CreateUploadUrlValues = z.infer<typeof createUploadUrlSchema>
 
 /**
+ * SOURCE OF TRUTH KEYWORDS: addManualClipSchema, suggestManualTitleSchema
+ *
+ * WHAT:  Inputs for the two manual-clip procedures on an EXISTING job:
+ *        `addManualClip` (cut + append a user range) and `suggestManualTitle`
+ *        (an AI title for the picked window). Both reference the job by id and
+ *        carry the chosen window; the router validates the window against the
+ *        job's known `durationSec`.
+ */
+export const addManualClipSchema = clipJobRefSchema
+  .extend({
+    startSec: z.number().min(0),
+    endSec: z.number().positive(),
+    title: z.string().trim().min(1).max(120).optional(),
+  })
+  .refine((r) => r.endSec - r.startSec >= 1, {
+    message: 'A clip must be at least 1 second long.',
+    path: ['endSec'],
+  })
+
+export const suggestManualTitleSchema = clipJobRefSchema
+  .extend({
+    startSec: z.number().min(0),
+    endSec: z.number().positive(),
+  })
+  .refine((r) => r.endSec - r.startSec >= 1, {
+    message: 'A clip must be at least 1 second long.',
+    path: ['endSec'],
+  })
+
+export type AddManualClipValues = z.infer<typeof addManualClipSchema>
+export type SuggestManualTitleValues = z.infer<typeof suggestManualTitleSchema>
+
+/**
  * SOURCE OF TRUTH KEYWORDS: ClipJobTimings, parseClipJobTimings
  *
  * WHAT:  Per-stage wall-clock (ms) persisted on ClipJob.timings (a Json column)
@@ -144,4 +204,29 @@ export function parseClipJobTimings(value: unknown): ClipJobTimings | null {
     if (typeof raw === 'number' && Number.isFinite(raw)) timings[key] = raw
   }
   return Object.keys(timings).length > 0 ? timings : null
+}
+
+/**
+ * SOURCE OF TRUTH KEYWORDS: parseManualRanges, ManualRange, manualRanges JSON
+ *
+ * WHAT:  Narrows the untyped `ClipJob.manualRanges` Json column into ManualRange[]
+ *        (drops anything malformed) — no `any` cast, same pattern as timings.
+ * WHERE: The worker reads pending manual ranges off the job row.
+ */
+export function parseManualRanges(value: unknown): ManualRange[] {
+  if (!Array.isArray(value)) return []
+  const ranges: ManualRange[] = []
+  for (const item of value) {
+    if (!item || typeof item !== 'object') continue
+    const record = item as Record<string, unknown>
+    const { startSec, endSec, title } = record
+    if (typeof startSec !== 'number' || typeof endSec !== 'number') continue
+    if (!Number.isFinite(startSec) || !Number.isFinite(endSec) || endSec <= startSec) continue
+    ranges.push({
+      startSec,
+      endSec,
+      ...(typeof title === 'string' && title.trim() ? { title: title.trim() } : {}),
+    })
+  }
+  return ranges
 }
