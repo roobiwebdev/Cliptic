@@ -35,6 +35,7 @@ import {
 import { getClipPlanLimits } from '@/lib/config/clip-limits'
 import { getOrganizationTier } from '@/lib/feature-gate'
 import { enqueue, getQueue, QUEUE_NAMES } from '@/lib/queue'
+import { slugify } from '@/lib/utils'
 import * as clipsService from '@/services/clips.service'
 import * as storage from '@/services/storage.service'
 
@@ -151,13 +152,20 @@ export const clipsRouter = createTRPCRouter({
       if (!job) throw new TRPCError({ code: 'NOT_FOUND', message: 'Clip job not found.' })
 
       const clips = await Promise.all(
-        job.clips.map(async (clip) => ({
-          ...clip,
-          videoUrl: await storage.getSignedDownloadUrl(clip.r2Key, SIGNED_URL_TTL_SEC),
-          thumbnailUrl: clip.thumbnailKey
-            ? await storage.getSignedDownloadUrl(clip.thumbnailKey, SIGNED_URL_TTL_SEC)
-            : null,
-        }))
+        job.clips.map(async (clip) => {
+          /* Two URLs from the same object: an INLINE one for the <video> preview,
+           * and an ATTACHMENT one (Content-Disposition + slug filename) so the
+           * Download button actually saves the file with a clean name. */
+          const filename = `${slugify(clip.title ?? '', `clip-${clip.index}`)}.mp4`
+          return {
+            ...clip,
+            videoUrl: await storage.getSignedDownloadUrl(clip.r2Key, SIGNED_URL_TTL_SEC),
+            downloadUrl: await storage.getSignedDownloadUrl(clip.r2Key, SIGNED_URL_TTL_SEC, filename),
+            thumbnailUrl: clip.thumbnailKey
+              ? await storage.getSignedDownloadUrl(clip.thumbnailKey, SIGNED_URL_TTL_SEC)
+              : null,
+          }
+        })
       )
       return { ...job, clips }
     }),
