@@ -29,11 +29,14 @@ import type { Source } from '../types'
 const log = createLogger('source')
 
 /**
- * Auth args applied to EVERY yt-dlp call (id-probe + download): cookies and/or
- * proxy. Cookies (a signed-in session) and a residential proxy are the two
- * levers that beat YouTube's datacenter-IP bot-blocking / HTTP 429 — the reason
- * a link that downloads fine locally fails from a cloud host. The cookies file
- * is written once from YTDLP_COOKIES and reused (memoised) across jobs.
+ * Base flags applied to EVERY yt-dlp call (id-probe + download).
+ * - `--ignore-config`: run HERMETIC — never inherit the machine's global
+ *   ~/.config/yt-dlp/config. A dev's personal config (cookies-from-browser,
+ *   -P/-o playlist templates, --download-archive, --embed-*) would otherwise
+ *   hijack the pipeline's controlled invocation and fail the download.
+ * - cookies / proxy: the two levers that beat YouTube's datacenter-IP
+ *   bot-blocking / HTTP 429. The cookies file is written once from YTDLP_COOKIES
+ *   and reused (memoised) across jobs.
  */
 let cookiesPath: string | undefined | null = null
 function ytdlpAuthArgs(): string[] {
@@ -47,7 +50,7 @@ function ytdlpAuthArgs(): string[] {
       cookiesPath = undefined
     }
   }
-  const args: string[] = []
+  const args: string[] = ['--ignore-config']
   if (cookiesPath) args.push('--cookies', cookiesPath)
   if (mediaConfig.download.proxy) args.push('--proxy', mediaConfig.download.proxy)
   /* PO token: only when a provider is configured (worker container). Locally
