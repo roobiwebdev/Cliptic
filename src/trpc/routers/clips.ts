@@ -253,6 +253,18 @@ export const clipsRouter = createTRPCRouter({
       /* The persisted source lives under the separate `sources/` prefix. */
       if (job.sourceKey) await storage.deleteObject(job.sourceKey).catch(() => {})
 
+      /* Editor outputs live under their OWN `clip-edits/` prefix, so the FK
+       * cascade removes the ClipEdit rows but NOT the R2 objects — wipe them. */
+      const edits = await ctx.db.clipEdit.findMany({
+        where: { organizationId: input.organizationId, clip: { clipJobId: job.id } },
+        select: { id: true },
+      })
+      for (const edit of edits) {
+        await storage
+          .deletePrefix(storage.storageKeys.clipEditPrefix(input.organizationId, edit.id))
+          .catch(() => {})
+      }
+
       return ctx.db.clipJob.delete({ where: { id: job.id } })
     }),
 
