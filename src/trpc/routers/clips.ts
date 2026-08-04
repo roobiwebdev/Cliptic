@@ -48,7 +48,14 @@ import { enqueue, getQueue, QUEUE_NAMES } from '@/lib/queue'
 import { slugify } from '@/lib/utils'
 /* Import the title unit DIRECTLY from the analyze stage (not the media-pipeline
  * barrel) so the router graph never pulls in the ffmpeg/yt-dlp stages. */
-import { generateTitleForRange, sliceTranscriptWindow } from '@/lib/media-pipeline/stages/analyze'
+import {
+  generateTitleForRange,
+  sliceTranscriptWindow,
+  sliceTranscriptWords,
+} from '@/lib/media-pipeline/stages/analyze'
+/* Pure caption compiler (no ffmpeg) — safe in the web graph; seeds the editor's
+ * default caption lines so they match exactly what the render burns. */
+import { buildCaptionEvents } from '@/lib/media-pipeline/captions/ass'
 import type { Transcript } from '@/lib/media-pipeline/types'
 import * as clipsService from '@/services/clips.service'
 import * as clipEditService from '@/services/clip-edit.service'
@@ -383,6 +390,34 @@ export const clipsRouter = createTRPCRouter({
         editedPreviewUrl,
         editedDownloadUrl,
       }
+    }),
+
+  /* Default caption lines for the Editor — the clip's transcript window grouped
+   * into timed lines (the SAME grouping the render burns). Empty when the clip's
+   * job has no transcript. Fetched once when the user turns captions on. */
+  getEditorCaptions: protectedProcedure({ requirePermission: permissions.CLIPS_READ })
+    .input(editorClipRefSchema)
+    .query(async ({ ctx, input }) => {
+      const clip = await ctx.db.clip.findFirst({
+        where: { id: input.clipId, organizationId: input.organizationId },
+        include: { clipJob: { select: { transcriptKey: true } } },
+      })
+      if (!clip) throw new TRPCError({ code: 'NOT_FOUND', message: 'Clip not found.' })
+
+      const emptySegments: { startSec: number; endSec: number; text: string }[] = []
+      if (!clip.clipJob.transcriptKey) return { segments: emptySegments }
+
+      const transcript = JSON.parse(
+        (await storage.downloadBuffer(clip.clipJob.transcriptKey)).toString('utf8')
+      ) as Transcript
+      const words = sliceTranscriptWords(transcript, clip.startSec, clip.endSec)
+      const events = buildCaptionEvents({ words, uppercase: false, emoji: true })
+      const segments = events.map((e) => ({
+        startSec: Number(e.start.toFixed(2)),
+        endSec: Number(e.end.toFixed(2)),
+        text: e.words.map((w) => w.text).join(' '),
+      }))
+      return { segments }
     }),
 
   /* Save the draft edit spec (debounced autosave). Gated by clips:update; not

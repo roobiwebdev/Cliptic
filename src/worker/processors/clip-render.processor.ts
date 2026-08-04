@@ -27,7 +27,7 @@ import type { Job } from 'bullmq'
 import { prisma } from '@/lib/config/prisma'
 import { registerProcessor, QUEUE_NAMES } from '@/lib/queue'
 import { parseEditSpec, type ClipEditRenderPayload } from '@/lib/types'
-import { renderEditSpec, type Word, type Transcript } from '@/lib/media-pipeline'
+import { renderEditSpec, sliceTranscriptWords, type Word, type Transcript } from '@/lib/media-pipeline'
 import { putObject, downloadToFile, downloadBuffer, storageKeys } from '@/services/storage.service'
 import { userSafeError } from '../lib/worker-error'
 
@@ -35,18 +35,6 @@ import { userSafeError } from '../lib/worker-error'
 async function isEditCanceled(clipEditId: string): Promise<boolean> {
   const row = await prisma.clipEdit.findUnique({ where: { id: clipEditId }, select: { status: true } })
   return !row || row.status === 'CANCELED'
-}
-
-/** Transcript words inside the clip window, shifted to CLIP-relative seconds. */
-function clipCaptionWords(transcript: Transcript, startSec: number, endSec: number): Word[] {
-  return transcript.words
-    .filter((w) => w.start < endSec && w.end > startSec)
-    .map((w) => ({
-      text: w.text,
-      start: Math.max(0, w.start - startSec),
-      end: Math.max(0, w.end - startSec),
-    }))
-    .filter((w) => w.end > w.start)
 }
 
 async function handleClipRender(job: Job): Promise<void> {
@@ -94,7 +82,7 @@ async function handleClipRender(job: Job): Promise<void> {
         const transcript = JSON.parse(
           (await downloadBuffer(clip.clipJob.transcriptKey)).toString('utf8')
         ) as Transcript
-        captionWords = clipCaptionWords(transcript, clip.startSec, clip.endSec)
+        captionWords = sliceTranscriptWords(transcript, clip.startSec, clip.endSec)
       } catch {
         /* captions are best-effort — a missing/broken transcript just skips them */
       }
