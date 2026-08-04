@@ -31,6 +31,7 @@ import {
   CheckCircle2,
   Circle,
   Clock,
+  Crop,
   Download,
   Loader2,
   Trash2,
@@ -387,7 +388,7 @@ export function JobDetail({ jobId }: { jobId: string }) {
           </div>
           <div className="grid gap-4 sm:grid-cols-2">
             {job.clips.map((clip) => (
-              <ClipCard key={clip.id} clip={clip} />
+              <ClipCard key={clip.id} clip={clip} jobId={jobId} />
             ))}
           </div>
         </div>
@@ -418,7 +419,7 @@ async function downloadAll(urls: string[]): Promise<void> {
   }
 }
 
-function ClipCard({ clip }: { clip: ClipItem }) {
+function ClipCard({ clip, jobId }: { clip: ClipItem; jobId: string }) {
   return (
     <Card className="overflow-hidden pt-0">
       <video
@@ -442,17 +443,23 @@ function ClipCard({ clip }: { clip: ClipItem }) {
         {clip.reason ? (
           <p className="text-muted-foreground line-clamp-3 text-sm">{clip.reason}</p>
         ) : null}
-        <div className="flex items-center justify-between">
+        <div className="flex items-center justify-between gap-2">
           <span className="text-muted-foreground text-xs">
             {(clip.endSec - clip.startSec).toFixed(0)}s
           </span>
-          <a
-            href={clip.downloadUrl}
-            className={buttonVariants({ size: 'sm', variant: 'outline' })}
-          >
-            <Download />
-            Download
-          </a>
+          <div className="flex items-center gap-2">
+            <Link
+              href={`/dashboard/clips/${jobId}/${clip.id}/edit`}
+              className={buttonVariants({ size: 'sm', variant: 'outline' })}
+            >
+              <Crop />
+              Edit
+            </Link>
+            <a href={clip.downloadUrl} className={buttonVariants({ size: 'sm', variant: 'outline' })}>
+              <Download />
+              Download
+            </a>
+          </div>
         </div>
       </CardContent>
     </Card>
