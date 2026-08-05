@@ -21,7 +21,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { createHash } from 'node:crypto'
 import { mediaConfig } from '../config'
-import { capture, runWithProgress, commandExists } from '../lib/exec'
+import { runWithProgress, commandExists } from '../lib/exec'
 import { createLogger } from '../lib/log'
 import { extractAudioForTranscription } from '../lib/media'
 import type { Source } from '../types'
@@ -29,7 +29,44 @@ import type { Source } from '../types'
 const log = createLogger('source')
 
 /**
- * Base flags applied to EVERY yt-dlp call (id-probe + download).
+ * SOURCE OF TRUTH KEYWORDS: parseYouTubeVideoId, youtube video id, url parse
+ *
+ * WHAT:  Extract the 11-char YouTube video id straight from the URL (youtu.be,
+ *        watch?v=, /shorts/, /embed/, /live/, /v/), with a stable hash fallback.
+ * WHY:   Avoids a SEPARATE yt-dlp `--print id` extraction. That extra probe was a
+ *        second, retry-less YouTube hit that 429'd FIRST on datacenter IPs and
+ *        failed the whole AI job before the download began — while the manual path
+ *        (which never probed) kept working. The id is already in the URL; no
+ *        network round-trip is needed.
+ * WHERE: resolveYoutube (this file). The value becomes ClipJob.externalVideoId.
+ */
+const YT_ID_RE = /^[A-Za-z0-9_-]{11}$/
+export function parseYouTubeVideoId(url: string): string {
+  try {
+    const u = new URL(url)
+    const host = u.hostname.replace(/^(www|m|music)\./, '').toLowerCase()
+    let candidate: string | undefined
+    if (host === 'youtu.be') {
+      candidate = u.pathname.split('/').filter(Boolean)[0]
+    } else if (host === 'youtube.com' || host.endsWith('.youtube.com')) {
+      const v = u.searchParams.get('v')
+      if (v) {
+        candidate = v
+      } else {
+        const parts = u.pathname.split('/').filter(Boolean)
+        const kind = parts[0]
+        if (kind && ['shorts', 'embed', 'live', 'v'].includes(kind)) candidate = parts[1]
+      }
+    }
+    if (candidate && YT_ID_RE.test(candidate)) return candidate
+  } catch {
+    /* not a parseable URL — fall through to the stable hash */
+  }
+  return 'yt-' + createHash('sha256').update(url).digest('hex').slice(0, 10)
+}
+
+/**
+ * Base flags applied to EVERY yt-dlp call (the download + manual section fetch).
  * - `--ignore-config`: run HERMETIC — never inherit the machine's global
  *   ~/.config/yt-dlp/config. A dev's personal config (cookies-from-browser,
  *   -P/-o playlist templates, --download-archive, --embed-*) would otherwise
@@ -114,9 +151,10 @@ async function resolveYoutube(params: ResolveSourceParams): Promise<Source> {
   if (!url) throw new Error('resolveSource: YouTube source requires a url.')
 
   const bin = mediaConfig.download.ytdlpBin
-  const videoId =
-    params.videoId ?? (await capture(bin, ['--print', 'id', '--no-download', ...ytdlpAuthArgs(), url]))
-  if (!videoId) throw new Error(`Could not resolve a video id for: ${url}`)
+  /* Derive the id from the URL — NO extra yt-dlp extraction. The old `--print id`
+   * probe was a second, retry-less YouTube hit that 429'd first on datacenter IPs
+   * (manual mode never probed, which is why it kept working). */
+  const videoId = params.videoId ?? parseYouTubeVideoId(url)
 
   const maxHeight = mediaConfig.download.maxHeight
   const videoPath = path.join(scratchDir, 'source.mp4')
