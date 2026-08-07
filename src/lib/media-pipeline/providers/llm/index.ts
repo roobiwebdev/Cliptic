@@ -12,14 +12,16 @@
  *        swapping the AI backend is a single env-var change.
  * WHERE: stages/analyze.ts.
  */
-import { mediaConfig } from '../../config'
+import { mediaConfig, type LlmProviderName } from '../../config'
 import type { LLMProvider } from './types'
 import { OpenAIProvider } from './openai'
 import { AnthropicProvider } from './anthropic'
 import { OllamaProvider } from './ollama'
 
-export function getLLMProvider(): LLMProvider {
-  switch (mediaConfig.llmProvider) {
+/** `override` lets callers route specific work (e.g. non-English transcripts)
+ *  to a different configured provider; default stays LLM_PROVIDER. */
+export function getLLMProvider(override?: LlmProviderName): LLMProvider {
+  switch (override ?? mediaConfig.llmProvider) {
     case 'openai':
       return new OpenAIProvider()
     case 'anthropic':
