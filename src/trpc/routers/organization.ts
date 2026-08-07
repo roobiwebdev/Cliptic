@@ -25,6 +25,7 @@ import { createTRPCRouter } from '../init'
 import { authProcedure } from '../procedures'
 import { createOrganizationSchema } from '@/lib/types'
 import { createOrganizationWithOwner } from '@/services/organization.service'
+import { linkAttributionToOrganization } from '@/services/referral.service'
 
 // authProcedure, not protectedProcedure: this is how the client discovers
 // which org to use before it can pass organizationId in inputs — and how a
@@ -53,8 +54,8 @@ export const organizationRouter = createTRPCRouter({
   createOrganization: authProcedure
     .input(createOrganizationSchema)
     .mutation(async ({ ctx, input }) => {
-      return ctx.prisma.$transaction(async (tx) => {
-        const result = await createOrganizationWithOwner(tx, {
+      const result = await ctx.prisma.$transaction(async (tx) => {
+        const created = await createOrganizationWithOwner(tx, {
           userId: ctx.user.id,
           name: input.name,
           logo: input.logo,
@@ -63,7 +64,12 @@ export const organizationRouter = createTRPCRouter({
           where: { id: ctx.user.id },
           data: { onboardingComplete: true },
         })
-        return result
+        return created
       })
+      /* AFTER the tx (fail-soft inside the service): stamp this org onto the
+       * user's referral attribution, if they were referred. Attribution must
+       * never make onboarding fail or roll back. */
+      await linkAttributionToOrganization(ctx.user.id, result.organizationId)
+      return result
     }),
 })

@@ -78,6 +78,7 @@ model User {
   activityLogs     ActivityLog[]
   cardFingerprints CardFingerprint[]
   clipJobs         ClipJob[]
+  referralCode     ReferralCode?
 
   @@map("user")
 }
@@ -314,6 +315,46 @@ model CardFingerprint {
   @@index([fingerprint])
   @@index([userId])
   @@map("cardFingerprint")
+}
+
+// ============================================================================
+// REFERRAL TRACKING
+// ============================================================================
+
+/// ReferralCode — one shareable code per user (nanoid, uppercase). Created
+/// lazily the first time the user opens the referrals page. Attribution only —
+/// no money moves; see referral.service.ts for the future payout seam
+/// (ReferralEarning credited from the webhook's invoice.payment_succeeded).
+///
+/// SOURCE OF TRUTH KEYWORD: ReferralCode
+model ReferralCode {
+  id        String   @id @default(cuid())
+  code      String   @unique
+  userId    String   @unique
+  createdAt DateTime @default(now())
+
+  user         User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  attributions ReferralAttribution[]
+
+  @@map("referralCode")
+}
+
+/// ReferralAttribution — "user X was referred by code Y" (first-touch, written
+/// once at signup from the ref_code cookie; org linked later at onboarding).
+/// `referredUserId` is unique: a user can only ever be referred once.
+///
+/// SOURCE OF TRUTH KEYWORD: ReferralAttribution
+model ReferralAttribution {
+  id                     String   @id @default(cuid())
+  referralCodeId         String
+  referredUserId         String   @unique
+  referredOrganizationId String?
+  createdAt              DateTime @default(now())
+
+  referralCode ReferralCode @relation(fields: [referralCodeId], references: [id], onDelete: Cascade)
+
+  @@index([referralCodeId])
+  @@map("referralAttribution")
 }
 
 // ============================================================================
