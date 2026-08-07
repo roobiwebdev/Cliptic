@@ -25,6 +25,7 @@ import { createBullConnection, getRegisteredProcessors } from '@/lib/queue'
 // Registering processors is a side effect of importing them.
 import './processors/clip.processor'
 import './processors/clip-render.processor'
+import './processors/clip-transcribe.processor'
 
 function getConcurrency(): number {
   const parsed = Number(process.env['WORKER_CONCURRENCY'] ?? 2)
