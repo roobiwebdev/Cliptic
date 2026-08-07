@@ -109,6 +109,9 @@ export interface MediaConfig {
   /** Optional stronger provider for NON-English transcripts (LLM_PROVIDER_NON_ENGLISH).
    *  Unset = use llmProvider for every language. */
   llmProviderNonEnglish: LlmProviderName | undefined
+  /** Two-pass candidate→judge selection (CLIP_JUDGE_PASS on|off, default on).
+   *  The budget lever: off = single-call selection, one LLM call per job. */
+  clipJudgePass: boolean
   transcriber: TranscriberName
   /** Optional forced transcription language ISO code (TRANSCRIBE_LANGUAGE, e.g. "am").
    *  Unset = Whisper auto-detects — required for correct non-English transcripts. */
@@ -167,6 +170,7 @@ export const mediaConfig: MediaConfig = {
     ['openai', 'anthropic', 'ollama'] as const,
     'LLM_PROVIDER_NON_ENGLISH'
   ),
+  clipJudgePass: pickEnum(env['CLIP_JUDGE_PASS'], ['on', 'off'] as const, 'on', 'CLIP_JUDGE_PASS') === 'on',
   transcriber: pickEnum(env['TRANSCRIBER'], ['openai', 'whisper-cpp'] as const, 'openai', 'TRANSCRIBER'),
   transcribeLanguage: cleanEnv(env['TRANSCRIBE_LANGUAGE']) || undefined,
   openai: {
