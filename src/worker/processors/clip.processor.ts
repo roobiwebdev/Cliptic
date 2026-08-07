@@ -393,7 +393,8 @@ async function manualTitle(
     }
   }
   return (
-    (await generateTitleForRange(text)) || `Clip ${formatClock(range.startSec)}–${formatClock(range.endSec)}`
+    (await generateTitleForRange(text, transcript?.language)) ||
+    `Clip ${formatClock(range.startSec)}–${formatClock(range.endSec)}`
   )
 }
 
