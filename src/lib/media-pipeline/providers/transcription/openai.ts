@@ -34,6 +34,8 @@ interface ChunkResult {
   words: Word[]
   segments: TranscriptSegment[]
   text: string
+  /** Whisper's detected (or forced) language for this chunk, e.g. "english", "amharic". */
+  language: string
 }
 
 export class OpenAITranscriber implements Transcriber {
@@ -100,12 +102,15 @@ export class OpenAITranscriber implements Transcriber {
 
   /** Transcribe one file and shift its timestamps by `offset` seconds. */
   private async transcribeFile(client: OpenAI, filePath: string, offset: number): Promise<ChunkResult> {
+    /* No language param unless forced — Whisper AUTO-DETECTS, which is what
+     * makes non-English (e.g. Amharic) transcripts come back in their own
+     * language instead of being squeezed through English. */
     const res = await client.audio.transcriptions.create({
       file: createReadStream(filePath),
       model: mediaConfig.openai.transcribeModel,
       response_format: 'verbose_json',
       timestamp_granularities: ['word', 'segment'],
-      language: 'en',
+      ...(mediaConfig.transcribeLanguage ? { language: mediaConfig.transcribeLanguage } : {}),
     })
 
     const words: Word[] = (res.words ?? []).map((w) => ({
@@ -118,7 +123,7 @@ export class OpenAITranscriber implements Transcriber {
       end: s.end + offset,
       text: s.text,
     }))
-    return { words, segments, text: res.text }
+    return { words, segments, text: res.text, language: res.language ?? '' }
   }
 
   /** Merge chunk results into a single, time-ordered Transcript. */
@@ -129,7 +134,8 @@ export class OpenAITranscriber implements Transcriber {
       .map((c) => c.text.trim())
       .filter(Boolean)
       .join(' ')
-    return { text, words, segments, duration, language: 'en' }
+    const language = majorityLanguage(chunks)
+    return { text, words, segments, duration, ...(language ? { language } : {}) }
   }
 
   /** Split [0, duration] into sub-ranges, snapping boundaries to nearby silence. */
@@ -160,6 +166,25 @@ export class OpenAITranscriber implements Transcriber {
     }
     return ranges
   }
+}
+
+/** Most common detected language across chunks (chunks can disagree on noisy audio). */
+function majorityLanguage(chunks: ChunkResult[]): string {
+  const counts = new Map<string, number>()
+  for (const c of chunks) {
+    const lang = c.language.trim().toLowerCase()
+    if (!lang) continue
+    counts.set(lang, (counts.get(lang) ?? 0) + 1)
+  }
+  let best = ''
+  let bestCount = 0
+  for (const [lang, count] of counts) {
+    if (count > bestCount) {
+      best = lang
+      bestCount = count
+    }
+  }
+  return best
 }
 
 /** Midpoint of the silence closest to `target` (within `window`, after `after`), or null. */

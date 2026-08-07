@@ -7,7 +7,8 @@
 
 /**
  * SOURCE OF TRUTH KEYWORDS: Source, Word, TranscriptSegment, Transcript,
- *   ClipRange, ClipResult, MediaSourceType, Media Pipeline
+ *   ClipRange, ClipResult, MediaSourceType, Sentence, AnalysisKnowledgeBlock,
+ *   Media Pipeline
  *
  * WHAT:  The typed "pipe" every media-pipeline stage communicates through —
  *        ported from the Clipper CLI. This module is the single source of truth
@@ -55,6 +56,42 @@ export interface Transcript {
   segments?: TranscriptSegment[]
   duration: number // seconds
   language?: string
+}
+
+/**
+ * SOURCE OF TRUTH KEYWORDS: Sentence, sentence anchor, sentence boundary
+ *
+ * WHAT:  One spoken sentence rebuilt from word timestamps — the unit the clip
+ *        AI anchors to (it returns sentence indices, never raw seconds).
+ * WHY:   Cutting on sentence boundaries makes mid-thought cuts impossible by
+ *        construction, and word-gap timing is language-agnostic (works for
+ *        Amharic and any script, not just punctuated English).
+ * WHERE: lib/sentences.ts builds these; stages/analyze.ts renders + maps them.
+ */
+export interface Sentence {
+  /** 0-based index — the id the LLM references (s0, s1, …). */
+  index: number
+  /** Start of the sentence's first word (seconds). */
+  start: number
+  /** End of the sentence's last word (seconds). */
+  end: number
+  text: string
+}
+
+/**
+ * SOURCE OF TRUTH KEYWORDS: AnalysisKnowledgeBlock, knowledge pack, virality knowledge
+ *
+ * WHAT:  One reusable block of expert knowledge injected into the clip-selection
+ *        system prompt (id + title + distilled prompt text).
+ * WHY:   Knowledge (story formats, future niche/platform rulebooks) plugs into
+ *        the analyze prompt as data, not hardcoded prose — add a block, nothing
+ *        else changes. Distilled at build time to keep per-job token cost low.
+ * WHERE: knowledge/* defines blocks; stages/analyze.ts injects them.
+ */
+export interface AnalysisKnowledgeBlock {
+  id: string
+  title: string
+  promptText: string
 }
 
 /** A clip the LLM chose, in source-time seconds, with its rationale. */

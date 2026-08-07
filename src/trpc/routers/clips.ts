@@ -297,7 +297,8 @@ export const clipsRouter = createTRPCRouter({
         (await storage.downloadBuffer(job.transcriptKey)).toString('utf8')
       ) as Transcript
       const title = await generateTitleForRange(
-        sliceTranscriptWindow(transcript, input.startSec, input.endSec)
+        sliceTranscriptWindow(transcript, input.startSec, input.endSec),
+        transcript.language
       )
       return { title }
     }),

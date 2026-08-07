@@ -56,6 +56,20 @@ function pickEnum<T extends string>(
   return v as T
 }
 
+/** Like pickEnum but with NO fallback — unset/empty means "feature off". */
+function pickOptionalEnum<T extends string>(
+  value: string | undefined,
+  allowed: readonly T[],
+  varName: string
+): T | undefined {
+  const v = cleanEnv(value)
+  if (v === '') return undefined
+  if (!(allowed as readonly string[]).includes(v)) {
+    throw new Error(`Invalid ${varName}="${value}". Allowed: ${allowed.join(', ')}.`)
+  }
+  return v as T
+}
+
 function num(value: string | undefined, fallback: number, varName: string): number {
   const v = cleanEnv(value)
   if (v === '') return fallback
@@ -92,7 +106,13 @@ const clips = clipsSchema.parse({
 
 export interface MediaConfig {
   llmProvider: LlmProviderName
+  /** Optional stronger provider for NON-English transcripts (LLM_PROVIDER_NON_ENGLISH).
+   *  Unset = use llmProvider for every language. */
+  llmProviderNonEnglish: LlmProviderName | undefined
   transcriber: TranscriberName
+  /** Optional forced transcription language ISO code (TRANSCRIBE_LANGUAGE, e.g. "am").
+   *  Unset = Whisper auto-detects — required for correct non-English transcripts. */
+  transcribeLanguage: string | undefined
   openai: {
     apiKey: string
     chatModel: string
@@ -142,7 +162,13 @@ export interface MediaConfig {
 
 export const mediaConfig: MediaConfig = {
   llmProvider: pickEnum(env['LLM_PROVIDER'], ['openai', 'anthropic', 'ollama'] as const, 'openai', 'LLM_PROVIDER'),
+  llmProviderNonEnglish: pickOptionalEnum(
+    env['LLM_PROVIDER_NON_ENGLISH'],
+    ['openai', 'anthropic', 'ollama'] as const,
+    'LLM_PROVIDER_NON_ENGLISH'
+  ),
   transcriber: pickEnum(env['TRANSCRIBER'], ['openai', 'whisper-cpp'] as const, 'openai', 'TRANSCRIBER'),
+  transcribeLanguage: cleanEnv(env['TRANSCRIBE_LANGUAGE']) || undefined,
   openai: {
     apiKey: env['OPENAI_API_KEY'] ?? '',
     chatModel: env['OPENAI_CHAT_MODEL'] ?? 'gpt-4o',
