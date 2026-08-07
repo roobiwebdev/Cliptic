@@ -80,6 +80,8 @@ export type {
   CreateSubscriptionValues,
   UpgradeSubscriptionValues,
 } from './billing'
+export { discountCodeSchema } from './discount'
+export type { ResolvedDiscount, DiscountCodeValue } from './discount'
 export {
   clipSourceTypeSchema,
   clipJobModeSchema,
