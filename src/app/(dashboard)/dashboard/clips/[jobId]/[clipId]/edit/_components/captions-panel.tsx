@@ -124,7 +124,9 @@ export function CaptionsPanel({
       <CardContent className="space-y-4">
         {!hasTranscript ? (
           <p className="text-muted-foreground text-xs">
-            This clip has no transcript, so captions aren&apos;t available.
+            Captions need a transcript, and this clip&apos;s video was never transcribed.
+            Videos processed with AI clips are transcribed automatically (in any language) —
+            clips from those can always be captioned.
           </p>
         ) : null}
 
