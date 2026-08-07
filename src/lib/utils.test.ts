@@ -6,7 +6,7 @@
  */
 
 import { describe, it, expect } from 'vitest'
-import { formatClock, parseClock } from './utils'
+import { formatClock, parseClock, formatCaptionsForCopy } from './utils'
 
 describe('formatClock', () => {
   it('always shows hours (H:MM:SS), default 0', () => {
@@ -42,5 +42,26 @@ describe('parseClock', () => {
     expect(parseClock('1:99')).toBeNull() // seconds out of range
     expect(parseClock('1:05:99')).toBeNull()
     expect(parseClock('')).toBeNull()
+  })
+})
+
+describe('formatCaptionsForCopy', () => {
+  const segments = [
+    { startSec: 0.4, text: 'Here is how I went' },
+    { startSec: 3903, text: 'ከዜሮ ወደ ስኬት' },
+  ]
+
+  it('copies plain text lines when timestamps are off', () => {
+    expect(formatCaptionsForCopy(segments, false)).toBe('Here is how I went\nከዜሮ ወደ ስኬት')
+  })
+
+  it('prefixes [H:MM:SS] timestamps when the toggle is on — any language untouched', () => {
+    expect(formatCaptionsForCopy(segments, true)).toBe(
+      '[0:00:00] Here is how I went\n[1:05:03] ከዜሮ ወደ ስኬት'
+    )
+  })
+
+  it('returns an empty string for no segments', () => {
+    expect(formatCaptionsForCopy([], true)).toBe('')
   })
 })
