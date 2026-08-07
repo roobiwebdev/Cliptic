@@ -7,7 +7,8 @@
 
 /**
  * SOURCE OF TRUTH KEYWORDS: BaseLayout, emailStyles, EmailButton,
- *   EmailVerificationEmail, PasswordResetEmail, TeamInvitationEmail
+ *   EmailVerificationEmail, PasswordResetEmail, TeamInvitationEmail,
+ *   PaymentFailedEmail, TrialEndingEmail
  *
  * WHAT:  Barrel for the transactional email templates and the shared layout.
  * WHY:   Single import surface so the email service references templates by
@@ -28,3 +29,11 @@ export {
   TeamInvitationEmail,
   type TeamInvitationEmailProps,
 } from './transactional/team-invitation'
+export {
+  PaymentFailedEmail,
+  type PaymentFailedEmailProps,
+} from './transactional/payment-failed'
+export {
+  TrialEndingEmail,
+  type TrialEndingEmailProps,
+} from './transactional/trial-ending'

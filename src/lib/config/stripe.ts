@@ -7,7 +7,7 @@
 
 /**
  * SOURCE OF TRUTH KEYWORDS: getStripeClient, isStripeConfigured,
- *   STRIPE_API_VERSION, getStripeWebhookSecret
+ *   STRIPE_API_VERSION, getStripeWebhookSecret, STRIPE_PLATFORM
  *
  * WHAT:  Lazy server-side Stripe client + config guards. Constructs the SDK on
  *        first use so a missing STRIPE_SECRET_KEY doesn't crash import/build.
@@ -20,6 +20,21 @@
  */
 
 import Stripe from 'stripe'
+
+/**
+ * SOURCE OF TRUTH KEYWORDS: STRIPE_PLATFORM, SharedStripeAccount, ClipticIsolation
+ *
+ * WHAT:  The platform tag stamped on EVERY Stripe object this app creates
+ *        (customers, subscriptions) as `metadata.platform`.
+ * WHY:   The Stripe account is SHARED across several platforms. This tag —
+ *        together with Cliptic-owned price ids — is how the webhook decides an
+ *        event belongs to Cliptic and how any dashboard search isolates
+ *        Cliptic's objects. Never create a Stripe object without it, and never
+ *        point env price ids at another platform's products.
+ * WHERE: payment.service (customer create), billing router (subscription
+ *        create/update), webhook route (event filtering).
+ */
+export const STRIPE_PLATFORM = 'cliptic' as const
 
 /* Pinned to the installed SDK's latest API version. In this version the
  * subscription period fields live on the subscription ITEMS

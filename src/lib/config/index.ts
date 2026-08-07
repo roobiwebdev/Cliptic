@@ -12,7 +12,7 @@
  *   getResendClient, RESEND_DEFAULT_FROM, isResendConfigured, ROUTES,
  *   AppRouteKey, PLAN_ORDER, BillingInterval, getPlanPriceId, getPlanByPriceId,
  *   getNextPlan, isPaidPlan, getStripeClient, isStripeConfigured,
- *   getStripeWebhookSecret, STRIPE_API_VERSION, portalConfig, isPortalEnabled,
+ *   getStripeWebhookSecret, STRIPE_API_VERSION, STRIPE_PLATFORM, portalConfig, isPortalEnabled,
  *   isPortalOwnerEmail, PORTAL_PATH
  *
  * WHAT:  Barrel re-export for the `src/lib/config/*` modules.
@@ -61,6 +61,7 @@ export {
   isStripeConfigured,
   getStripeWebhookSecret,
   STRIPE_API_VERSION,
+  STRIPE_PLATFORM,
 } from './stripe'
 export {
   portalConfig,
