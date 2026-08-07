@@ -13,10 +13,10 @@ FROM node:20-bookworm-slim
 # System tools the media pipeline shells out to (+ python for pip yt-dlp).
 # fontconfig + fonts give libass what it needs to BURN captions (editor render):
 #   - fonts-noto-color-emoji → emoji glyphs in captions
-#   - fonts-noto-core / fonts-dejavu-core → a clean sans fallback for any caption
-#     font family. The branded caption fonts (Inter/Montserrat/Poppins/Anton/
-#     Bebas Neue) fall back to Noto until their OFL .ttf files are dropped into
-#     /usr/share/fonts and `fc-cache`d — a drop-in follow-up, no code change.
+#   - fonts-noto-core → wide-Unicode fallback INCLUDING Noto Sans Ethiopic
+#     (Regular + Bold), so Amharic/Ethiopic captions render with correct glyphs —
+#     libass falls back per-glyph via fontconfig when the branded font lacks a
+#     script. fonts-dejavu-core → extra Latin fallback.
 RUN apt-get update && apt-get install -y --no-install-recommends \
       ffmpeg \
       aria2 \
@@ -31,6 +31,25 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       fonts-noto-color-emoji \
       fonts-dejavu-core \
  && rm -rf /var/lib/apt/lists/*
+
+# Branded caption fonts (the CAPTION_FONTS allowlist in src/lib/types/edit-spec.ts:
+# Inter, Montserrat, Poppins, Anton, Bebas Neue) — OFL-licensed, fetched from the
+# google/fonts repo at a PINNED commit so builds are reproducible. The final RUN
+# asserts every caption family AND Ethiopic resolve via fontconfig, so a missing
+# glyph set FAILS THE BUILD instead of shipping tofu captions.
+ARG GOOGLE_FONTS_COMMIT=2d85e20401920891efb7cd6272d6339685df2820
+RUN mkdir -p /usr/share/fonts/truetype/cliptic \
+ && base="https://raw.githubusercontent.com/google/fonts/${GOOGLE_FONTS_COMMIT}" \
+ && curl -fsSL "$base/ofl/inter/Inter%5Bopsz,wght%5D.ttf"      -o /usr/share/fonts/truetype/cliptic/Inter.ttf \
+ && curl -fsSL "$base/ofl/montserrat/Montserrat%5Bwght%5D.ttf" -o /usr/share/fonts/truetype/cliptic/Montserrat.ttf \
+ && curl -fsSL "$base/ofl/poppins/Poppins-Regular.ttf"         -o /usr/share/fonts/truetype/cliptic/Poppins-Regular.ttf \
+ && curl -fsSL "$base/ofl/poppins/Poppins-Bold.ttf"            -o /usr/share/fonts/truetype/cliptic/Poppins-Bold.ttf \
+ && curl -fsSL "$base/ofl/anton/Anton-Regular.ttf"             -o /usr/share/fonts/truetype/cliptic/Anton-Regular.ttf \
+ && curl -fsSL "$base/ofl/bebasneue/BebasNeue-Regular.ttf"     -o /usr/share/fonts/truetype/cliptic/BebasNeue-Regular.ttf \
+ && fc-cache -f \
+ && for family in "Inter" "Montserrat" "Poppins" "Anton" "Bebas Neue" "Noto Sans Ethiopic" "Noto Color Emoji"; do \
+      fc-list | grep -qi "$family" || { echo "FONT MISSING: $family" >&2; exit 1; }; \
+    done
 
 # yt-dlp via pip (REQUIRED: the bgutil PO-token plugin only loads under a
 # pip/pipx yt-dlp, not the standalone binary) + the PO-token plugin itself.
