@@ -77,23 +77,25 @@ describe('fitSpanToLength', () => {
   it('returns word-precise bounds with breathing room for a fitting span', () => {
     const sentences = makeSentences(['a.', 'b.', 'c.', 'd.', 'e.'])
     const fitted = fitSpanToLength(sentences, 1, 4, duration)
-    expect(fitted).not.toBeNull()
-    expect(fitted?.endIdx).toBe(4)
     const first = sentences[1]
     const last = sentences[4]
-    expect(fitted!.start).toBeLessThanOrEqual(first!.start)
-    expect(fitted!.end).toBeGreaterThanOrEqual(last!.end)
+    if (!fitted || !first || !last) throw new Error('expected a fitted span and sentences')
+    expect(fitted.endIdx).toBe(4)
+    expect(fitted.start).toBeLessThanOrEqual(first.start)
+    expect(fitted.end).toBeGreaterThanOrEqual(last.end)
   })
 
   it('trims an over-long span back to a sentence end, never mid-thought', () => {
     // 20 sentences x ~6.4s ≈ 128s span — beyond hardMax (90); must trim to ≤ targetMax (60).
     const sentences = makeSentences(Array.from({ length: 20 }, (_, i) => `sentence ${i}.`))
     const fitted = fitSpanToLength(sentences, 0, 19, duration)
-    expect(fitted).not.toBeNull()
-    expect(fitted!.endIdx).toBeLessThan(19)
-    expect(fitted!.end - fitted!.start).toBeLessThanOrEqual(60)
+    if (!fitted) throw new Error('expected a fitted span')
+    const trimmedEnd = sentences[fitted.endIdx]
+    if (!trimmedEnd) throw new Error('expected the trimmed sentence to exist')
+    expect(fitted.endIdx).toBeLessThan(19)
+    expect(fitted.end - fitted.start).toBeLessThanOrEqual(60)
     // The fitted end lands exactly on the trimmed sentence's word timing (+roll).
-    expect(fitted!.end).toBeGreaterThanOrEqual(sentences[fitted!.endIdx]!.end)
+    expect(fitted.end).toBeGreaterThanOrEqual(trimmedEnd.end)
   })
 
   it('drops a span that cannot reach the minimum length', () => {
