@@ -6,16 +6,19 @@
  */
 
 /**
- * SOURCE OF TRUTH KEYWORDS: cut, OnClipReady, snapToWordGap, encodeClip
+ * SOURCE OF TRUTH KEYWORDS: cut, OnClipReady, settleIntoSilence, snapToWordGap,
+ *   encodeClip, silence-settled boundaries
  *
  * WHAT:  STAGE 4 — turn chosen ranges into clip files (+ poster thumbnails),
  *        cutting from the already-downloaded LOCAL source, in PARALLEL, and
  *        invoking `onClip` the moment each clip is ready so the worker can
  *        upload + persist it immediately (time-to-first-clip / streaming).
- * WHY:   Boundaries snap to word gaps (silence between words) so clips don't
- *        start/end mid-word. Clips are re-encoded frame-accurately (caption-
- *        ready); speed comes from input-seek + bounded concurrency, not from
- *        stream-copy (which would misalign cuts). No per-clip network fetch.
+ * WHY:   Boundaries settle into REAL audio silence (ffmpeg-detected — catches
+ *        breaths/laughs/music the transcript can't see, in any language), with
+ *        transcript word gaps as the fallback, so clips never start/end mid-word.
+ *        Clips are re-encoded frame-accurately (caption-ready); speed comes from
+ *        input-seek + bounded concurrency, not from stream-copy (which would
+ *        misalign cuts). No per-clip network fetch.
  * WHERE: Called by the clip worker processor.
  */
 import path from 'node:path'
@@ -23,12 +26,16 @@ import { stat } from 'node:fs/promises'
 import { run } from '../lib/exec'
 import { createLogger } from '../lib/log'
 import { generateThumbnail } from '../lib/media'
+import { detectSilences, type Silence } from '../lib/silence'
 import { mediaConfig } from '../config'
 import type { Source, ClipRange, ClipResult, Transcript, Word } from '../types'
 
 const log = createLogger('cut')
 
 const SNAP_WINDOW_SEC = 0.7 // search this far around a boundary for a word gap
+const SETTLE_WINDOW_SEC = 0.6 // search this far around a boundary for real silence
+const SILENCE_MIN_SEC = 0.25 // shortest audio silence worth settling into
+const SILENCE_INSET_SEC = 0.05 // keep the cut slightly inside the silence edge
 
 /**
  * SOURCE OF TRUTH KEYWORDS: OnClipReady
@@ -59,10 +66,60 @@ function snapToWordGap(t: number, words: Word[]): number {
   return best
 }
 
-function snapRange(range: ClipRange, transcript?: Transcript): { start: number; end: number } {
+/**
+ * SOURCE OF TRUTH KEYWORDS: settleIntoSilence, silence-settled boundary
+ *
+ * WHAT:  Move a boundary into REAL detected silence near `t` (or keep it if it
+ *        already sits in silence). Word-guarded: a start never moves past the
+ *        first word it must keep; an end never moves before the last word.
+ * WHY:   Audio truth beats transcript timing — Whisper word edges drift, but a
+ *        cut inside actual silence always sounds clean, in any language.
+ */
+function settleIntoSilence(
+  t: number,
+  kind: 'start' | 'end',
+  words: Word[],
+  silences: Silence[]
+): number | null {
+  if (silences.some((s) => t >= s.start && t <= s.end)) return t // already clean
+
+  const firstWordAfter = words.find((w) => w.start >= t)
+  let lastWordBefore: Word | undefined
+  for (let i = words.length - 1; i >= 0; i--) {
+    const w = words[i]
+    if (w && w.end <= t) {
+      lastWordBefore = w
+      break
+    }
+  }
+
+  let best: number | null = null
+  let bestDist = Infinity
+  for (const s of silences) {
+    const lo = s.start + SILENCE_INSET_SEC
+    const hi = s.end - SILENCE_INSET_SEC
+    if (lo > hi) continue
+    const point = Math.min(Math.max(t, lo), hi) // nearest in-silence point to t
+    const dist = Math.abs(point - t)
+    if (dist > SETTLE_WINDOW_SEC || dist >= bestDist) continue
+    // Word guards: never settle a cut onto speech the clip must keep.
+    if (kind === 'start' && firstWordAfter && point > firstWordAfter.start) continue
+    if (kind === 'end' && lastWordBefore && point < lastWordBefore.end) continue
+    best = point
+    bestDist = dist
+  }
+  return best
+}
+
+function snapRange(
+  range: ClipRange,
+  transcript: Transcript | undefined,
+  silences: Silence[]
+): { start: number; end: number } {
   if (!transcript?.words.length) return { start: range.start, end: range.end }
-  const start = snapToWordGap(range.start, transcript.words)
-  const end = snapToWordGap(range.end, transcript.words)
+  const words = transcript.words
+  const start = settleIntoSilence(range.start, 'start', words, silences) ?? snapToWordGap(range.start, words)
+  const end = settleIntoSilence(range.end, 'end', words, silences) ?? snapToWordGap(range.end, words)
   return end - start > 1 ? { start, end } : { start: range.start, end: range.end }
 }
 
@@ -104,9 +161,10 @@ async function encodeOneClip(
   range: ClipRange,
   index: number,
   outDir: string,
-  transcript: Transcript | undefined
+  transcript: Transcript | undefined,
+  silences: Silence[]
 ): Promise<ClipResult> {
-  const { start, end } = snapRange(range, transcript)
+  const { start, end } = snapRange(range, transcript, silences)
   const padded = String(index).padStart(2, '0')
   const clipPath = path.join(outDir, `clip_${padded}.mp4`)
 
@@ -150,6 +208,18 @@ export async function cut(
   let nextIndex = 0
   let completed = 0
 
+  /* One silence pass for ALL boundaries — best-effort; word-gap snapping
+   * remains the fallback when audio is unavailable or detection fails. */
+  let silences: Silence[] = []
+  if (source.audioPath) {
+    try {
+      silences = await detectSilences(source.audioPath, -30, SILENCE_MIN_SEC)
+      log(`detected ${silences.length} silences for boundary settling`)
+    } catch (err) {
+      log(`silence detection failed (non-fatal): ${err instanceof Error ? err.message : String(err)}`)
+    }
+  }
+
   async function pump(): Promise<void> {
     for (;;) {
       const i = nextIndex
@@ -157,7 +227,7 @@ export async function cut(
       if (i >= total) return
       const range = ranges[i]
       if (!range) continue
-      const result = await encodeOneClip(source, range, i + 1, outDir, transcript)
+      const result = await encodeOneClip(source, range, i + 1, outDir, transcript, silences)
       results[i] = result
       completed += 1
       log(`clip ${completed}/${total} ready`)
