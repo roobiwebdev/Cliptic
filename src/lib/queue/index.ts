@@ -32,6 +32,9 @@ export const QUEUE_NAMES = {
   /* Editor exports — apply a ClipEdit's spec to a clip mp4 via ffmpeg. Its own
    * queue keeps render jobs isolated from the clip pipeline (own payload/status). */
   clipRender: 'clip-render',
+  /* On-demand transcription of ONE clip (caption fallback when the job has no
+   * transcript) — light Whisper jobs on their own queue, any language. */
+  clipTranscribe: 'clip-transcribe',
 } as const
 
 export type QueueName = (typeof QUEUE_NAMES)[keyof typeof QUEUE_NAMES]

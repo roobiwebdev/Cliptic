@@ -39,6 +39,7 @@ import {
   parseEditSpec,
   type ClipJobPayload,
   type ClipEditRenderPayload,
+  type ClipTranscribePayload,
   type ManualRange,
 } from '@/lib/types'
 import type { Prisma } from '@/generated/prisma'
@@ -382,7 +383,13 @@ export const clipsRouter = createTRPCRouter({
           startSec: clip.startSec,
           endSec: clip.endSec,
           durationSec: clip.durationSec,
-          hasTranscript: Boolean(clip.clipJob.transcriptKey),
+          /* Captionable from EITHER transcript: the job's (AI runs) or the
+           * clip's own on-demand one — same experience for AI and manual. */
+          hasTranscript: Boolean(
+            clip.clipJob.transcriptKey ||
+              (clip.transcriptKey && clip.transcriptStatus === 'COMPLETED')
+          ),
+          transcriptStatus: clip.clipJob.transcriptKey ? 'COMPLETED' : clip.transcriptStatus,
         },
         edit: clip.edit
           ? {
@@ -406,8 +413,11 @@ export const clipsRouter = createTRPCRouter({
     }),
 
   /* Default caption lines for the Editor — the clip's transcript window grouped
-   * into timed lines (the SAME grouping the render burns). Empty when the clip's
-   * job has no transcript. Fetched once when the user turns captions on. */
+   * into timed lines (the SAME grouping the render burns). Sources, in order:
+   * the job's transcript (AI runs) or the clip's own on-demand transcript
+   * (manual cuts, written by the clip-transcribe worker) — identical output
+   * either way, in the clip's own language. `transcriptStatus` lets the Editor
+   * poll while an on-demand transcription is running. */
   getEditorCaptions: protectedProcedure({ requirePermission: permissions.CLIPS_READ })
     .input(editorClipRefSchema)
     .query(async ({ ctx, input }) => {
@@ -417,20 +427,74 @@ export const clipsRouter = createTRPCRouter({
       })
       if (!clip) throw new TRPCError({ code: 'NOT_FOUND', message: 'Clip not found.' })
 
-      const emptySegments: { startSec: number; endSec: number; text: string }[] = []
-      if (!clip.clipJob.transcriptKey) return { segments: emptySegments }
+      /* Job transcript = source-time words (slice to the clip window); clip
+       * transcript = already clip-relative (we transcribed the clip file). */
+      let words: ReturnType<typeof sliceTranscriptWords> | null = null
+      let language: string | undefined
+      if (clip.clipJob.transcriptKey) {
+        const transcript = JSON.parse(
+          (await storage.downloadBuffer(clip.clipJob.transcriptKey)).toString('utf8')
+        ) as Transcript
+        words = sliceTranscriptWords(transcript, clip.startSec, clip.endSec)
+        language = transcript.language
+      } else if (clip.transcriptKey && clip.transcriptStatus === 'COMPLETED') {
+        const transcript = JSON.parse(
+          (await storage.downloadBuffer(clip.transcriptKey)).toString('utf8')
+        ) as Transcript
+        words = transcript.words
+        language = transcript.language
+      }
 
-      const transcript = JSON.parse(
-        (await storage.downloadBuffer(clip.clipJob.transcriptKey)).toString('utf8')
-      ) as Transcript
-      const words = sliceTranscriptWords(transcript, clip.startSec, clip.endSec)
+      const transcriptStatus = clip.clipJob.transcriptKey ? 'COMPLETED' : clip.transcriptStatus
+      if (!words) {
+        return {
+          segments: [] as { startSec: number; endSec: number; text: string }[],
+          transcriptStatus,
+          language: language ?? null,
+        }
+      }
+
       const events = buildCaptionEvents({ words, uppercase: false, emoji: true })
       const segments = events.map((e) => ({
         startSec: Number(e.start.toFixed(2)),
         endSec: Number(e.end.toFixed(2)),
         text: e.words.map((w) => w.text).join(' '),
       }))
-      return { segments }
+      return { segments, transcriptStatus, language: language ?? null }
+    }),
+
+  /* Kick off ON-DEMAND transcription of one clip (caption fallback when the
+   * job has no transcript) — Whisper on the clip's own audio, language
+   * auto-detected, exact spoken words. Idempotent: already-transcribed or
+   * in-flight clips return their status without re-enqueueing. */
+  transcribeClip: protectedProcedure({ requirePermission: permissions.CLIPS_UPDATE })
+    .input(editorClipRefSchema)
+    .mutation(async ({ ctx, input }) => {
+      const clip = await ctx.db.clip.findFirst({
+        where: { id: input.clipId, organizationId: input.organizationId },
+        include: { clipJob: { select: { transcriptKey: true } } },
+      })
+      if (!clip) throw new TRPCError({ code: 'NOT_FOUND', message: 'Clip not found.' })
+
+      if (clip.clipJob.transcriptKey || clip.transcriptStatus === 'COMPLETED') {
+        return { status: 'COMPLETED' as const }
+      }
+      if (clip.transcriptStatus === 'QUEUED' || clip.transcriptStatus === 'TRANSCRIBING') {
+        return { status: clip.transcriptStatus }
+      }
+
+      await ctx.db.clip.update({
+        where: { id: clip.id },
+        data: { transcriptStatus: 'QUEUED' },
+      })
+      await enqueue(
+        QUEUE_NAMES.clipTranscribe,
+        'transcribe',
+        { clipId: clip.id, organizationId: input.organizationId } satisfies ClipTranscribePayload,
+        /* nanoid suffix: a FAILED attempt can be retried (BullMQ dedupes by jobId). */
+        { jobId: `${clip.id}:transcribe:${nanoid()}` }
+      )
+      return { status: 'QUEUED' as const }
     }),
 
   /* Save the draft edit spec (debounced autosave). Gated by clips:update; not
