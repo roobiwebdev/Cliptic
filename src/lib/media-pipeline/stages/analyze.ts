@@ -7,12 +7,16 @@
 
 /**
  * SOURCE OF TRUTH KEYWORDS: analyze, buildPrompt, sentence-anchored selection,
- *   hookQuote, quality floor, virality rulebook, fitSpanToLength, providerOverrideFor
+ *   hookQuote, quality floor, virality rulebook, fitSpanToLength, providerOverrideFor,
+ *   judge pass, judgeCandidates, CandidateSpan, two-pass selection
  *
  * WHAT:  STAGE 3 — transcript → ClipRange[] (each with start/end/reason). The
  *        LLM never sees the video; it reasons over SENTENCE-anchored transcript
  *        lines and returns sentence indices (never raw seconds), which we map
- *        back to precise word timestamps.
+ *        back to precise word timestamps. TWO-PASS: pass 1 shortlists candidates
+ *        from the whole transcript (recall), pass 2 — ONE judge call — re-reads
+ *        each candidate's full text, kills the weak, and finalizes boundaries
+ *        (precision). CLIP_JUDGE_PASS=off restores single-call selection.
  * WHY:   This stage owns the whole domain contract — prompt (virality rulebook +
  *        knowledge packs), JSON validation, and constraint enforcement (count,
  *        hard/target length, non-overlap, quality floor). Sentence anchoring
@@ -27,7 +31,7 @@ import { createLogger } from '../lib/log'
 import { extractJson } from '../lib/json'
 import { assembleSentences, renderSentences } from '../lib/sentences'
 import { getAnalysisKnowledge } from '../knowledge'
-import { getLLMProvider } from '../providers/llm'
+import { getLLMProvider, type LLMProvider } from '../providers/llm'
 import type { Transcript, ClipRange, Sentence, Word } from '../types'
 
 const log = createLogger('analyze')
@@ -39,6 +43,11 @@ const POST_ROLL_SEC = 0.35
 const MIN_CLIP_SCORE = 55
 /** Ask for ~1 clip per this many seconds of source (capped by CLIP_COUNT). */
 const ASK_SEC_PER_CLIP = 240
+/** Judge pass tuning: pass 1 keeps recall high (low floor, 2x ask, capped),
+ *  the judge restores precision and may move boundaries ±context sentences. */
+const JUDGE_CANDIDATE_FLOOR = 40
+const JUDGE_MAX_CANDIDATES = 14
+const JUDGE_CONTEXT_SENTENCES = 2
 
 const llmClipSchema = z.object({
   startSentence: z.number().int().min(0),
@@ -54,6 +63,33 @@ const llmClipSchema = z.object({
 const lenientClipSchema = llmClipSchema.nullable().catch(null)
 const llmResponseSchema = z.object({ clips: z.array(lenientClipSchema) })
 type LlmClip = z.infer<typeof llmClipSchema>
+
+const judgeVerdictSchema = z.object({
+  id: z.number().int().min(0),
+  keep: z.boolean().catch(false),
+  startSentence: z.number().int().min(0),
+  endSentence: z.number().int().min(0),
+  score: z.number().catch(0),
+  reason: z.string().catch(''),
+})
+const lenientVerdictSchema = judgeVerdictSchema.nullable().catch(null)
+const judgeResponseSchema = z.object({ verdicts: z.array(lenientVerdictSchema) })
+
+/**
+ * SOURCE OF TRUTH KEYWORDS: CandidateSpan, candidate clip
+ *
+ * WHAT:  A pass-1 candidate still in SENTENCE space (indices, not seconds) so
+ *        the judge can move its boundaries before anything becomes a timestamp.
+ */
+interface CandidateSpan {
+  startIdx: number
+  endIdx: number
+  title: string
+  reason: string
+  payoff: string
+  hookQuote: string
+  score: number
+}
 
 /** True when the transcript language is missing/English — no provider override. */
 function isEnglish(language: string | undefined): boolean {
@@ -138,9 +174,12 @@ function matchKey(text: string): string {
  * WHAT:  Verifies the clip's first sentence IS the quoted hook; if the model
  *        buried the hook deeper in its span, moves startSentence to it.
  * WHY:   hookQuote is the enforcement contract for hook-first selection — the
- *        model cannot claim a hook it did not start on.
+ *        model cannot claim a hook it did not start on. Exported for unit tests.
  */
-function realignToHookQuote(clip: LlmClip, sentences: Sentence[]): number {
+export function realignToHookQuote(
+  clip: Pick<LlmClip, 'hookQuote' | 'startSentence' | 'endSentence'>,
+  sentences: Sentence[]
+): number {
   const hook = matchKey(clip.hookQuote).slice(0, 24)
   if (hook.length < 4) return clip.startSentence
   for (let i = clip.startSentence; i <= clip.endSentence; i++) {
@@ -184,15 +223,17 @@ function boundsForSpan(
  *
  * WHAT:  Length limits enforced on SENTENCE boundaries: an over-long span is
  *        walked back to the longest earlier sentence end that fits targetMax —
- *        never chopped mid-thought at an arbitrary second.
+ *        never chopped mid-thought at an arbitrary second. Returns the fitted
+ *        end index alongside the seconds. Exported for unit tests.
  */
-function fitSpanToLength(
+export function fitSpanToLength(
   sentences: Sentence[],
   startIdx: number,
   endIdx: number,
   duration: number
-): { start: number; end: number } | null {
+): { endIdx: number; start: number; end: number } | null {
   const { hardMin, hardMax, targetMax } = mediaConfig.clips
+  let fittedEnd = endIdx
   let bounds = boundsForSpan(sentences, startIdx, endIdx, duration)
   if (!bounds) return null
 
@@ -201,30 +242,130 @@ function fitSpanToLength(
       const candidate = boundsForSpan(sentences, startIdx, e, duration)
       if (candidate && candidate.end - candidate.start <= targetMax) {
         bounds = candidate
+        fittedEnd = e
         break
       }
     }
     if (bounds.end - bounds.start > hardMax) return null
   }
 
-  return bounds.end - bounds.start < hardMin ? null : bounds
+  if (bounds.end - bounds.start < hardMin) return null
+  return { endIdx: fittedEnd, start: bounds.start, end: bounds.end }
 }
 
-/** Clamp/verify one raw LLM clip into an acceptable ClipRange, or null to drop it. */
-function toClipRange(raw: LlmClip, sentences: Sentence[], duration: number): ClipRange | null {
+/** Validate one raw pass-1 clip into a sentence-space candidate, or null to drop it. */
+function candidateFromLlm(raw: LlmClip, sentences: Sentence[]): CandidateSpan | null {
   const maxIdx = sentences.length - 1
   if (raw.startSentence > maxIdx || raw.endSentence > maxIdx) return null
   if (raw.endSentence < raw.startSentence) return null
+  return {
+    startIdx: realignToHookQuote(raw, sentences),
+    endIdx: raw.endSentence,
+    title: raw.title,
+    reason: raw.reason,
+    payoff: raw.payoff,
+    hookQuote: raw.hookQuote,
+    score: Math.max(0, Math.min(100, raw.score)),
+  }
+}
 
-  const startIdx = realignToHookQuote(raw, sentences)
-  const bounds = fitSpanToLength(sentences, startIdx, raw.endSentence, duration)
-  if (!bounds) return null
-
-  const reason = raw.payoff ? `${raw.reason} Payoff: ${raw.payoff}` : raw.reason
-  const clip: ClipRange = { start: bounds.start, end: bounds.end, reason }
-  if (raw.title) clip.title = raw.title
-  clip.score = Math.max(0, Math.min(100, raw.score))
+/** Candidate (sentence space) → final ClipRange (seconds), or null if it can't fit. */
+function rangeFromCandidate(c: CandidateSpan, sentences: Sentence[], duration: number): ClipRange | null {
+  const fitted = fitSpanToLength(sentences, c.startIdx, c.endIdx, duration)
+  if (!fitted) return null
+  const reason = c.payoff ? `${c.reason} Payoff: ${c.payoff}` : c.reason
+  const clip: ClipRange = { start: fitted.start, end: fitted.end, reason }
+  if (c.title) clip.title = c.title
+  clip.score = c.score
   return clip
+}
+
+function buildJudgePrompt(candidates: CandidateSpan[], sentences: Sentence[]): { system: string; user: string } {
+  const system = [
+    `You are a ruthless senior short-form editor doing the FINAL review of candidate clips another editor shortlisted from a long video. You see each candidate's full transcript text — judge what is actually THERE, in the transcript's own language. A weak published clip costs more than a missing one.`,
+    `For each candidate:`,
+    `1. HOOK: the clip's FIRST sentence must stop a stranger's scroll with zero context. If a stronger opening sentence exists inside the candidate, move startSentence to it.`,
+    `2. RESOLUTION: the LAST sentence must complete the thought — punchline landed, lesson stated, story beat closed. Move endSentence to the sentence that truly resolves; never end on the setup of the next idea.`,
+    `3. STANDALONE: if the clip depends on anything outside its own text, keep=false.`,
+    `4. Re-score strictly: hook 0-30 + retention/payoff 0-25 + emotion 0-15 + shareability 0-15 + standalone clarity 0-15. Below 55 = keep=false. 85+ is rare.`,
+    `Boundaries may only move within the lines shown for that candidate (lines starting with ~ are surrounding context you may extend into).`,
+  ].join('\n')
+
+  const blocks = candidates.map((c, id) => {
+    const from = Math.max(0, c.startIdx - JUDGE_CONTEXT_SENTENCES)
+    const to = Math.min(sentences.length - 1, c.endIdx + JUDGE_CONTEXT_SENTENCES)
+    const lines: string[] = []
+    for (let i = from; i <= to; i++) {
+      const s = sentences[i]
+      if (!s) continue
+      const context = i < c.startIdx || i > c.endIdx ? '~' : ''
+      lines.push(`${context}s${s.index} [${s.start.toFixed(1)}] ${s.text}`)
+    }
+    return [
+      `CANDIDATE ${id} (proposed s${c.startIdx}-s${c.endIdx}, pass-1 score ${Math.round(c.score)}): ${c.title || '(untitled)'}`,
+      ...lines,
+    ].join('\n')
+  })
+
+  const user = [
+    `Review the ${candidates.length} candidates below. Sentence lines are \`s<index> [<start seconds>] <text>\`; lines starting with ~ are context beyond the proposed span (you may move boundaries into them).`,
+    ``,
+    blocks.join('\n\n'),
+    ``,
+    `Return ONLY JSON in exactly this shape (one verdict per candidate, same id order):`,
+    `{"verdicts":[{"id":int,"keep":true|false,"startSentence":int,"endSentence":int,"score":0-100,"reason":"one sentence in the transcript's language"}]}`,
+  ].join('\n')
+
+  return { system, user }
+}
+
+/**
+ * SOURCE OF TRUTH KEYWORDS: judgeCandidates, judge pass, two-pass selection
+ *
+ * WHAT:  Pass 2 — ONE LLM call re-reads every candidate in full (with ±context
+ *        sentences), kills the weak, moves boundaries onto the true hook /
+ *        resolution, and re-scores. Returns surviving candidates in sentence
+ *        space, or null on any failure (callers fall back to pass-1 results —
+ *        a judge hiccup must never fail the job).
+ * WHY:   Pass 1 reads the WHOLE transcript (attention diluted); the judge sees
+ *        only candidate text, so precision costs one focused call (~3-5k tokens)
+ *        instead of per-candidate calls.
+ */
+async function judgeCandidates(
+  provider: LLMProvider,
+  candidates: CandidateSpan[],
+  sentences: Sentence[]
+): Promise<CandidateSpan[] | null> {
+  const { system, user } = buildJudgePrompt(candidates, sentences)
+  try {
+    const rawText = await provider.complete({ system, user, json: true, maxTokens: 2048 })
+    const parsed = judgeResponseSchema.parse(JSON.parse(extractJson(rawText)))
+    const maxIdx = sentences.length - 1
+
+    const survivors: CandidateSpan[] = []
+    for (const verdict of parsed.verdicts) {
+      if (!verdict || !verdict.keep) continue
+      const original = candidates[verdict.id]
+      if (!original) continue
+      /* The judge may only move boundaries within the context window it saw. */
+      const lo = Math.max(0, original.startIdx - JUDGE_CONTEXT_SENTENCES)
+      const hi = Math.min(maxIdx, original.endIdx + JUDGE_CONTEXT_SENTENCES)
+      const startIdx = Math.min(Math.max(verdict.startSentence, lo), hi)
+      const endIdx = Math.min(Math.max(verdict.endSentence, startIdx), hi)
+      survivors.push({
+        ...original,
+        startIdx,
+        endIdx,
+        score: Math.max(0, Math.min(100, verdict.score)),
+        reason: verdict.reason || original.reason,
+      })
+    }
+    log(`judge: ${survivors.length}/${candidates.length} candidates survived`)
+    return survivors
+  } catch (err) {
+    log(`judge pass failed (falling back to pass-1): ${err instanceof Error ? err.message : String(err)}`)
+    return null
+  }
 }
 
 /**
@@ -304,12 +445,16 @@ export async function analyze(transcript: Transcript): Promise<ClipRange[]> {
     mediaConfig.clips.count,
     Math.max(2, Math.round(transcript.duration / ASK_SEC_PER_CLIP))
   )
+  /* With the judge on, pass 1 over-generates (recall) and the judge trims back
+   * to quality (precision); off = classic single-call selection. */
+  const judgeOn = mediaConfig.clipJudgePass
+  const passOneAsk = judgeOn ? Math.min(JUDGE_MAX_CANDIDATES, askCount * 2) : askCount
 
   const provider = getLLMProvider(providerOverrideFor(transcript.language))
   log(
-    `selecting clips with "${provider.name}" (${askCount} asked, ${sentences.length} sentences, lang=${transcript.language ?? 'unknown'})`
+    `selecting clips with "${provider.name}" (${passOneAsk} asked, judge=${judgeOn ? 'on' : 'off'}, ${sentences.length} sentences, lang=${transcript.language ?? 'unknown'})`
   )
-  const { system, user } = buildPrompt(sentences, askCount)
+  const { system, user } = buildPrompt(sentences, passOneAsk)
   const rawText = await provider.complete({ system, user, json: true, maxTokens: 4096 })
 
   let parsed: z.infer<typeof llmResponseSchema>
@@ -324,16 +469,36 @@ export async function analyze(transcript: Transcript): Promise<ClipRange[]> {
 
   const candidates = parsed.clips
     .filter((c): c is LlmClip => c !== null)
-    .map((c) => toClipRange(c, sentences, transcript.duration))
+    .map((c) => candidateFromLlm(c, sentences))
+    .filter((c): c is CandidateSpan => c !== null)
+    .sort((a, b) => b.score - a.score)
+
+  /* ── Pass 2: the judge (one call) — kill weak candidates, finalize boundaries ── */
+  let selected: CandidateSpan[] = candidates
+  if (judgeOn && candidates.length > 0) {
+    const shortlist = candidates
+      .filter((c) => c.score >= JUDGE_CANDIDATE_FLOOR)
+      .slice(0, JUDGE_MAX_CANDIDATES)
+    if (shortlist.length > 0) {
+      selected = (await judgeCandidates(provider, shortlist, sentences)) ?? candidates
+    }
+  }
+
+  const finals = selected
+    .map((c) => rangeFromCandidate(c, sentences, transcript.duration))
     .filter((c): c is ClipRange => c !== null)
     .sort((a, b) => (b.score ?? 0) - (a.score ?? 0))
 
-  /* Quality floor: filler is dropped — but if the floor empties a non-empty
-   * batch, keep the single best so the job still delivers something. */
-  let ranked = candidates.filter((c) => (c.score ?? 0) >= MIN_CLIP_SCORE)
+  /* Quality floor: filler is dropped — but if the floor (or the judge) empties
+   * a non-empty batch, keep the single best pass-1 candidate so the job still
+   * delivers something. */
+  let ranked = finals.filter((c) => (c.score ?? 0) >= MIN_CLIP_SCORE)
   if (ranked.length === 0 && candidates.length > 0) {
-    ranked = candidates.slice(0, 1)
-    log(`all clips under quality floor ${MIN_CLIP_SCORE} — keeping the single best`)
+    const fallback = candidates
+      .map((c) => rangeFromCandidate(c, sentences, transcript.duration))
+      .filter((c): c is ClipRange => c !== null)
+    ranked = fallback.slice(0, 1)
+    log(`nothing survived the quality floor ${MIN_CLIP_SCORE} — keeping the single best candidate`)
   }
 
   // Greedily keep the best non-overlapping clips.
