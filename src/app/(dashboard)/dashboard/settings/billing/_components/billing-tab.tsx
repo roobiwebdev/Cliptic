@@ -8,11 +8,13 @@
 'use client'
 
 /**
- * SOURCE OF TRUTH KEYWORDS: BillingTab, BillingSkeleton
+ * SOURCE OF TRUTH KEYWORDS: BillingTab, BillingSkeleton, dunning, past_due
  *
- * WHAT:  Billing settings body — a Subscription section (plan, status, renewal
- *        date, change/cancel/reactivate) and a Payment Methods section (list +
- *        add / set-default / remove). Matches the funnelmods settings design.
+ * WHAT:  Billing settings body — a Subscription section covering EVERY state
+ *        (free plan, active, trial countdown, past_due + retry payment,
+ *        incomplete, canceled-until-period-end) and a Payment Methods section
+ *        (list + add / set-default / remove, expired-card aware). Matches the
+ *        funnelmods settings design.
  * WHY:   Reads from billing.getSubscription / billing.getPaymentMethods and
  *        drives the mutations; the DB row updates arrive via the Stripe webhook,
  *        so after each action we invalidate to re-read. Actions are UX-gated by
@@ -43,6 +45,7 @@ import {
   PaymentMethodRow,
   AddPaymentMethodDialog,
   ChangePlanDialog,
+  isCardExpired,
 } from '@/components/global/billing'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
@@ -50,6 +53,14 @@ import { Button } from '@/components/ui/button'
 import { Label } from '@/components/ui/label'
 import { Separator } from '@/components/ui/separator'
 import { Skeleton } from '@/components/ui/skeleton'
+
+/* Whole days from now until `date`, clamped at 0 — trial-countdown badge. */
+function daysUntil(date: Date): number {
+  return Math.max(
+    0,
+    Math.ceil((new Date(date).getTime() - Date.now()) / (24 * 60 * 60 * 1000))
+  )
+}
 
 export function BillingTab() {
   const { activeOrganization, isLoading: isLoadingOrg, hasPermission } = useActiveOrganization()
@@ -103,6 +114,13 @@ export function BillingTab() {
     },
     onError: () => toast.error('Failed to remove payment method'),
   })
+  const retry = trpc.billing.retryPayment.useMutation({
+    onSuccess: async () => {
+      toast.success('Payment succeeded — thanks!')
+      await refresh()
+    },
+    onError: (e) => toast.error(e.message || 'Payment could not be processed'),
+  })
 
   if (isLoadingOrg && !activeOrganization) return <BillingSkeleton />
   if (!activeOrganization) {
@@ -127,6 +145,18 @@ export function BillingTab() {
   const periodEnd = subscription?.periodEnd ?? null
   const methods = paymentMethodsQuery.data ?? []
 
+  /* Per-state derivations — see ACCESS_GRANTING_STATUSES (feature-gate.ts)
+   * for the status → access policy the UI mirrors. */
+  const isPastDue = subscription?.status === 'past_due'
+  const isIncomplete =
+    subscription !== null &&
+    ['incomplete', 'incomplete_expired', 'unpaid'].includes(subscription.status)
+  const trialDaysLeft =
+    data?.isOnTrial && subscription?.trialEnd ? daysUntil(subscription.trialEnd) : null
+  const defaultMethod = methods.find((m) => m.isDefault) ?? null
+  const defaultCardExpired =
+    defaultMethod !== null && isCardExpired(defaultMethod.expMonth, defaultMethod.expYear)
+
   function handleCancel() {
     if (!organizationId) return
     if (!window.confirm('Cancel your subscription? It stays active until the period ends.')) return
@@ -146,14 +176,64 @@ export function BillingTab() {
   return (
     <>
       <div className="space-y-8">
-        {subscription ? (
-          <SettingsSection
-            title="Subscription"
-            description="Manage your subscription plan and billing cycle"
-            label="Current Plan"
-            labelDescription="Your active subscription details"
-          >
+        <SettingsSection
+          title="Subscription"
+          description="Manage your subscription plan and billing cycle"
+          label="Current Plan"
+          labelDescription={
+            subscription ? 'Your active subscription details' : 'You are on the Free plan'
+          }
+        >
+          {subscription ? (
             <div className="space-y-6">
+              {/* Dunning: mirror of the ACCESS_GRANTING_STATUSES policy — access
+                  continues during past_due, so the alert pushes recovery, not panic. */}
+              {isPastDue ? (
+                <Alert className="border-destructive bg-destructive/10">
+                  <AlertTriangle className="h-4 w-4 text-destructive" />
+                  <AlertTitle className="text-destructive">Payment failed</AlertTitle>
+                  <AlertDescription className="space-y-3 text-sm">
+                    <p>
+                      {defaultCardExpired
+                        ? 'Your default card has expired. Add a new card or set a different default below, then retry the payment.'
+                        : "We couldn't charge your card. We'll keep retrying automatically — or retry now to restore billing immediately."}
+                    </p>
+                    {canManage ? (
+                      <Button
+                        onClick={() => organizationId && retry.mutate({ organizationId })}
+                        disabled={retry.isPending}
+                        size="lg"
+                        className="w-full gap-2"
+                      >
+                        {retry.isPending ? (
+                          <>
+                            <Loader2Icon className="h-4 w-4 animate-spin" />
+                            Retrying...
+                          </>
+                        ) : (
+                          <>
+                            <RefreshCw className="h-4 w-4" />
+                            Retry payment
+                          </>
+                        )}
+                      </Button>
+                    ) : null}
+                  </AlertDescription>
+                </Alert>
+              ) : null}
+
+              {isIncomplete ? (
+                <Alert>
+                  <AlertTriangle className="h-4 w-4" />
+                  <AlertTitle>Payment setup incomplete</AlertTitle>
+                  <AlertDescription className="text-sm">
+                    Your subscription&apos;s first payment didn&apos;t complete, so
+                    you&apos;re on the Free plan for now. Choose a plan again to finish
+                    setup.
+                  </AlertDescription>
+                </Alert>
+              ) : null}
+
               {isCanceled && periodEnd ? (
                 <Alert className="border-destructive bg-destructive/10">
                   <AlertTriangle className="h-4 w-4 text-destructive" />
@@ -193,7 +273,9 @@ export function BillingTab() {
                       <p className="text-sm font-medium">{data?.planName}</p>
                       {data?.isOnTrial ? (
                         <Badge variant="secondary" className="text-xs">
-                          Trial
+                          {trialDaysLeft !== null
+                            ? `Trial — ${trialDaysLeft} ${trialDaysLeft === 1 ? 'day' : 'days'} left`
+                            : 'Trial'}
                         </Badge>
                       ) : null}
                     </div>
@@ -242,8 +324,31 @@ export function BillingTab() {
                 ) : null}
               </div>
             </div>
-          </SettingsSection>
-        ) : null}
+          ) : (
+            /* Free plan — never a blank page: show the current plan + the way up. */
+            <div className="space-y-4">
+              <div className="space-y-1">
+                <Label>Plan</Label>
+                <div className="flex items-center gap-2">
+                  <p className="text-sm font-medium">{data?.planName ?? 'Free'}</p>
+                  <Badge variant="outline" className="text-xs">
+                    Current
+                  </Badge>
+                </div>
+                <p className="text-sm text-muted-foreground">
+                  You&apos;re on the free plan. Upgrade to unlock higher limits and paid
+                  features.
+                </p>
+              </div>
+              {canManage || canAdd ? (
+                <Button onClick={() => setChangePlanOpen(true)} size="sm" className="gap-2">
+                  <Sparkles className="h-4 w-4" />
+                  Upgrade plan
+                </Button>
+              ) : null}
+            </div>
+          )}
+        </SettingsSection>
 
         <SettingsSection
           title="Payment Methods"
@@ -297,6 +402,9 @@ export function BillingTab() {
             organizationId={organizationId}
             open={changePlanOpen}
             onOpenChange={setChangePlanOpen}
+            hasSubscription={subscription !== null}
+            hasPaymentMethod={methods.length > 0}
+            {...(data?.tier !== undefined ? { currentPlan: data.tier } : {})}
           />
         </>
       ) : null}
