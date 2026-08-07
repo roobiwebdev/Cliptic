@@ -30,6 +30,7 @@ import { getQueryClient, trpc } from '@/trpc/server'
 import { AUTH_ROUTES, ROUTES, PORTAL_PATH, isPortalOwnerEmail } from '@/lib/config'
 import { SidebarInset, SidebarProvider } from '@/components/ui/sidebar'
 import { AppSidebar } from '@/components/global/sidebar'
+import { BillingAlertBanner } from '@/components/global/billing'
 
 export default async function DashboardLayout({
   children,
@@ -65,7 +66,11 @@ export default async function DashboardLayout({
     <SidebarProvider>
       <HydrationBoundary state={dehydrate(queryClient)}>
         <AppSidebar />
-        <SidebarInset>{children}</SidebarInset>
+        <SidebarInset>
+          {/* Dunning / trial / cancellation warnings — every page, every member. */}
+          <BillingAlertBanner />
+          {children}
+        </SidebarInset>
       </HydrationBoundary>
     </SidebarProvider>
   )
