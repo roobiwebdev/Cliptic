@@ -61,7 +61,7 @@ export function ManualClipStudio({
 
   const [startSec, setStartSec] = React.useState(0)
   const [endSec, setEndSec] = React.useState(() => Math.min(30, durationSec || 30))
-  const [startStr, setStartStr] = React.useState('0:00')
+  const [startStr, setStartStr] = React.useState('0:00:00')
   const [endStr, setEndStr] = React.useState(() => formatClock(Math.min(30, durationSec || 30)))
   const [title, setTitle] = React.useState('')
   const [titleDirty, setTitleDirty] = React.useState(false)
@@ -271,8 +271,8 @@ export function ManualClipStudio({
         <div className="grid grid-cols-2 gap-3">
           {(
             [
-              { key: 'start' as const, label: 'Start', str: startStr },
-              { key: 'end' as const, label: 'End', str: endStr },
+              { key: 'start' as const, label: 'Start (H:MM:SS)', str: startStr },
+              { key: 'end' as const, label: 'End (H:MM:SS)', str: endStr },
             ]
           ).map((f) => (
             <div key={f.key} className="space-y-1.5">
@@ -281,7 +281,7 @@ export function ManualClipStudio({
                 <Input
                   value={f.str}
                   inputMode="numeric"
-                  placeholder="M:SS"
+                  placeholder="H:MM:SS"
                   onChange={(e) => {
                     const raw = e.target.value
                     if (f.key === 'start') setStartStr(raw)

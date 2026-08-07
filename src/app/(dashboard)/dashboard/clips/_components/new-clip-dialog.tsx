@@ -26,7 +26,7 @@ import { toast } from 'sonner'
 import { Plus, Link2, Upload, Loader2, Sparkles, Scissors } from 'lucide-react'
 
 import { trpc } from '@/trpc/react-provider'
-import { cn, parseClock } from '@/lib/utils'
+import { cn, parseClock, formatClock } from '@/lib/utils'
 import { useActiveOrganizationId } from '@/hooks/use-active-organization'
 import { FeatureGate } from '@/components/feature-gate'
 import { Button } from '@/components/ui/button'
@@ -93,8 +93,8 @@ export function NewClipDialog() {
   const [open, setOpen] = React.useState(false)
   const [tab, setTab] = React.useState<'link' | 'upload'>('link')
   const [mode, setMode] = React.useState<'AUTO' | 'MANUAL'>('AUTO')
-  const [startStr, setStartStr] = React.useState('0:00')
-  const [endStr, setEndStr] = React.useState('0:30')
+  const [startStr, setStartStr] = React.useState('0:00:00')
+  const [endStr, setEndStr] = React.useState('0:00:30')
   const [manualTitle, setManualTitle] = React.useState('')
   const [file, setFile] = React.useState<File | null>(null)
   const [uploadPct, setUploadPct] = React.useState<number | null>(null)
@@ -104,7 +104,7 @@ export function NewClipDialog() {
     const s = parseClock(startStr)
     const e = parseClock(endStr)
     if (s === null || e === null) {
-      toast.error('Enter valid times as M:SS (e.g. 3:05).')
+      toast.error('Enter valid times as H:MM:SS (e.g. 1:05:03).')
       return null
     }
     if (e - s < 1) {
@@ -254,28 +254,36 @@ export function NewClipDialog() {
               <div className="grid grid-cols-2 gap-3">
                 <div className="space-y-1.5">
                   <Label htmlFor="clip-start" className="text-xs">
-                    Start (M:SS)
+                    Start (H:MM:SS)
                   </Label>
                   <Input
                     id="clip-start"
                     value={startStr}
                     inputMode="numeric"
-                    placeholder="0:00"
+                    placeholder="0:00:00"
                     disabled={busy}
                     onChange={(e) => setStartStr(e.target.value)}
+                    onBlur={() => {
+                      const v = parseClock(startStr)
+                      if (v !== null) setStartStr(formatClock(v))
+                    }}
                   />
                 </div>
                 <div className="space-y-1.5">
                   <Label htmlFor="clip-end" className="text-xs">
-                    End (M:SS)
+                    End (H:MM:SS)
                   </Label>
                   <Input
                     id="clip-end"
                     value={endStr}
                     inputMode="numeric"
-                    placeholder="0:30"
+                    placeholder="0:00:30"
                     disabled={busy}
                     onChange={(e) => setEndStr(e.target.value)}
+                    onBlur={() => {
+                      const v = parseClock(endStr)
+                      if (v !== null) setEndStr(formatClock(v))
+                    }}
                   />
                 </div>
               </div>
