@@ -43,6 +43,25 @@ export function formatClock(totalSec: number): string {
   return `${h}:${String(m).padStart(2, "0")}:${String(sec).padStart(2, "0")}`
 }
 
+/**
+ * SOURCE OF TRUTH KEYWORDS: formatCaptionsForCopy, copy transcript, caption copy
+ *
+ * WHAT:  Caption lines → one plain-text block for the clipboard. Timestamps
+ *        ([H:MM:SS], via formatClock) are included ONLY when requested — the
+ *        Editor's timestamp toggle drives both what's shown and what's copied.
+ * WHY:   One shared formatter so the copied text always matches the UI, for any
+ *        language (text passes through untouched — Amharic, English, anything).
+ * WHERE: CaptionsPanel copy button (clip editor).
+ */
+export function formatCaptionsForCopy(
+  segments: ReadonlyArray<{ startSec: number; text: string }>,
+  includeTimestamps: boolean
+): string {
+  return segments
+    .map((s) => (includeTimestamps ? `[${formatClock(s.startSec)}] ${s.text}` : s.text))
+    .join("\n")
+}
+
 /** "H:MM:SS" | "M:SS" | "SS" → seconds, or null when unparseable. */
 export function parseClock(raw: string): number | null {
   const value = raw.trim()

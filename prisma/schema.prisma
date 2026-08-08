@@ -499,6 +499,11 @@ model Clip {
   thumbnailKey   String? // R2 object key of the poster image
   sizeBytes      Int?
   durationSec    Float?
+  /// On-demand CLIP-LEVEL transcript (clip-relative words, any language) for
+  /// clips whose job was never transcribed — same caption experience for AI
+  /// and MANUAL clips. Written by the clip-transcribe worker.
+  transcriptKey    String?
+  transcriptStatus ClipTranscriptStatus?
   createdAt      DateTime @default(now())
 
   clipJob      ClipJob      @relation(fields: [clipJobId], references: [id], onDelete: Cascade)
@@ -508,6 +513,16 @@ model Clip {
   @@index([clipJobId])
   @@index([organizationId])
   @@map("clip")
+}
+
+/// How a clip's ON-DEMAND transcription is progressing (only set for clips
+/// whose job has no transcript). QUEUED → TRANSCRIBING → COMPLETED | FAILED —
+/// mirrors the ClipEditStatus pattern, scoped to one clip's transcript.
+enum ClipTranscriptStatus {
+  QUEUED
+  TRANSCRIBING
+  COMPLETED
+  FAILED
 }
 
 /// How a clip's editor render is progressing. DRAFT = spec saved but not yet
