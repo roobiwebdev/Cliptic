@@ -213,7 +213,10 @@ export function ClipEditor({ jobId, clipId }: { jobId: string; clipId: string })
         return res.segments
       }
       if (res.transcriptStatus === 'FAILED') {
-        toast.error('Transcription failed — the clip may have no speech. Try again.')
+        toast.error(
+          'No speech found in this clip. Captions need spoken words — pick a section where someone is talking (skip music intros).',
+          { duration: 7000 }
+        )
         return null
       }
     }
