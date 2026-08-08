@@ -135,6 +135,14 @@ export function ClipEditor({ jobId, clipId }: { jobId: string; clipId: string })
     onError: (err) => toast.error(err.message),
   })
 
+  /* The clip's caption lines are ALWAYS visible when a transcript exists — the
+   * captions toggle only decides whether they're styled + burned into the export.
+   * Spec segments (user-edited) win over the freshly derived lines. */
+  const captionsQuery = trpc.clips.getEditorCaptions.useQuery(
+    { organizationId: organizationId ?? '', clipId },
+    { enabled: organizationId !== undefined && Boolean(data?.clip.hasTranscript) }
+  )
+
   if (organizationId === undefined || isLoading || !spec) {
     return (
       <div className="grid gap-6 lg:grid-cols-[1fr_20rem]">
@@ -211,6 +219,16 @@ export function ClipEditor({ jobId, clipId }: { jobId: string; clipId: string })
     }
     toast.error('Transcription is taking longer than expected — try again in a moment.')
     return null
+  }
+  /* "Transcribe clip" without enabling burn — the lines just become visible. */
+  const transcribeOnly = async (): Promise<void> => {
+    setTranscribing(true)
+    try {
+      const segments = await transcribeAndSeed()
+      if (segments) void utils.clips.getEditorCaptions.invalidate({ organizationId, clipId })
+    } finally {
+      setTranscribing(false)
+    }
   }
   const toggleCaptions = async (enabled: boolean): Promise<void> => {
     if (!enabled) {
@@ -411,10 +429,12 @@ export function ClipEditor({ jobId, clipId }: { jobId: string; clipId: string })
 
           <CaptionsPanel
             captions={spec.captions}
+            viewSegments={spec.captions?.segments ?? captionsQuery.data?.segments ?? []}
             hasTranscript={data.clip.hasTranscript}
             seeding={seedingCaptions}
             transcribing={transcribing}
             onToggle={(v) => void toggleCaptions(v)}
+            onTranscribe={() => void transcribeOnly()}
             onStyleChange={updateCaptionStyle}
             onSegmentText={updateSegmentText}
             onReset={() => void resetCaptions()}
