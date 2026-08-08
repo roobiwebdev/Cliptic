@@ -101,6 +101,7 @@ export {
 export type {
   ClipJobPayload,
   ClipEditRenderPayload,
+  ClipTranscribePayload,
   ManualRange,
   CreateClipJobValues,
   ListClipJobsValues,

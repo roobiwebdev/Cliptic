@@ -62,8 +62,12 @@ export interface AssDimensions {
 const EMOJI_REGEX =
   /[\u{1F1E6}-\u{1F1FF}\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}\u{2190}-\u{21FF}\u{2B00}-\u{2BFF}\u{FE00}-\u{FE0F}\u{200D}]/gu
 
-const MAX_WORDS_PER_LINE = 7
-const MAX_CHARS_PER_LINE = 30
+/* Short-form pacing: few words on screen at a time. Char cap counts CHARACTERS
+ * (script-agnostic); pixel overflow is impossible regardless because compileAss
+ * uses WrapStyle 0 — libass wraps within the margins when a line is still too
+ * wide for the frame (wide scripts like Ethiopic, huge font sizes). */
+const MAX_WORDS_PER_LINE = 5
+const MAX_CHARS_PER_LINE = 20
 const MAX_LINE_GAP_SEC = 0.8
 
 /**
@@ -220,7 +224,9 @@ export function compileAss(events: CaptionEvent[], style: AssStyle, dims: AssDim
     'ScriptType: v4.00+',
     `PlayResX: ${dims.width}`,
     `PlayResY: ${dims.height}`,
-    'WrapStyle: 2',
+    /* Smart wrap: a line wider than the frame (big fonts, wide scripts) breaks
+     * across balanced rows inside the margins instead of overflowing the edges. */
+    'WrapStyle: 0',
     'ScaledBorderAndShadow: yes',
     '',
     '[V4+ Styles]',

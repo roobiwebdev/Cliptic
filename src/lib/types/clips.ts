@@ -43,6 +43,18 @@ export interface ClipEditRenderPayload {
 }
 
 /**
+ * SOURCE OF TRUTH KEYWORDS: ClipTranscribePayload, clip transcribe job
+ *
+ * WHAT:  What we put on the `clip-transcribe` queue — just ids; the worker loads
+ *        the Clip row and writes the clip-level transcript + status back.
+ * WHERE: enqueued by clips.transcribeClip; consumed by the clip-transcribe processor.
+ */
+export interface ClipTranscribePayload {
+  clipId: string
+  organizationId: string
+}
+
+/**
  * SOURCE OF TRUTH KEYWORDS: clipSourceTypeSchema, clipJobModeSchema
  *
  * WHAT:  Zod enums mirroring the Prisma ClipSourceType / ClipJobMode.
