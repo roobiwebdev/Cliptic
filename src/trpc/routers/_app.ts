@@ -29,6 +29,7 @@ import { portalRouter } from './portal'
 import { devRouter } from './dev'
 import { userRouter } from './user'
 import { clipsRouter } from './clips'
+import { referralRouter } from './referral'
 
 /**
  * SOURCE OF TRUTH KEYWORDS: appRouter, AppRouter
@@ -52,6 +53,7 @@ export const appRouter = createTRPCRouter({
   dev: devRouter,
   user: userRouter,
   clips: clipsRouter,
+  referral: referralRouter,
 })
 
 export type AppRouter = typeof appRouter

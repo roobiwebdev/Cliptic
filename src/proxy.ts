@@ -21,6 +21,11 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { REGISTRATION_OPEN } from '@/lib/config/registration'
 import { AUTH_ROUTES } from '@/lib/config/auth-routes'
+import {
+  REFERRAL_QUERY_PARAM,
+  REFERRAL_COOKIE_NAME,
+  REFERRAL_COOKIE_MAX_AGE_DAYS,
+} from '@/lib/config/referral'
 
 /**
  * SOURCE OF TRUTH KEYWORDS: proxy
@@ -69,7 +74,23 @@ export async function proxy(request: NextRequest) {
   const forwardedHeaders = new Headers(request.headers)
   forwardedHeaders.set('x-pathname', pathname)
   forwardedHeaders.set('x-hostname', hostname)
-  return NextResponse.next({ request: { headers: forwardedHeaders } })
+  const response = NextResponse.next({ request: { headers: forwardedHeaders } })
+
+  /* Referral capture: ?ref=CODE → first-touch cookie (never overwrites an
+   * existing one, so the original introducer keeps the credit). Validation
+   * happens at attribution time (referral.service via referralCodeSchema) —
+   * here we only cap length to keep the cookie bounded. */
+  const refCode = request.nextUrl.searchParams.get(REFERRAL_QUERY_PARAM)
+  if (refCode && !request.cookies.get(REFERRAL_COOKIE_NAME)) {
+    response.cookies.set(REFERRAL_COOKIE_NAME, refCode.slice(0, 64), {
+      maxAge: REFERRAL_COOKIE_MAX_AGE_DAYS * 24 * 60 * 60,
+      httpOnly: true,
+      sameSite: 'lax',
+      path: '/',
+    })
+  }
+
+  return response
 }
 
 /**
