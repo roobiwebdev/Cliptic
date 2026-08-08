@@ -24,7 +24,7 @@ export { cut } from './stages/cut'
 export type { OnClipReady } from './stages/cut'
 export { renderEditSpec, buildRenderFilters, OUTPUT_DIMENSIONS } from './stages/render'
 export type { RenderResult, RenderEditSpecParams } from './stages/render'
-export { probeDuration } from './lib/media'
+export { probeDuration, extractAudioForTranscription } from './lib/media'
 export { mediaConfig } from './config'
 export type {
   Source,
