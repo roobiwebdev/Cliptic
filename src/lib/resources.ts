@@ -270,6 +270,9 @@ export const RESOURCES = {
       /* Editor export = a server render job; cap bursts on top of the per-plan
        * concurrent-render cap (src/lib/config/clip-limits.ts). */
       render: { count: 10, window: '1 m' },
+      /* On-demand clip transcription = a Whisper job; idempotency in the router
+       * already stops re-runs, this caps burst enqueues. */
+      transcribeClip: { count: 10, window: '1 m' },
     },
   },
 } as const satisfies Record<string, ResourceDefinition>

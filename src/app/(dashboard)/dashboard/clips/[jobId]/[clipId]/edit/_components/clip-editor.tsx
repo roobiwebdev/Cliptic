@@ -71,6 +71,7 @@ export function ClipEditor({ jobId, clipId }: { jobId: string; clipId: string })
   const [activeRegion, setActiveRegion] = React.useState(0)
   const [videoAspect, setVideoAspect] = React.useState(16 / 9)
   const [seedingCaptions, setSeedingCaptions] = React.useState(false)
+  const [transcribing, setTranscribing] = React.useState(false)
   const initializedRegions = React.useRef(false)
 
   /* The editable spec is the server's until the user touches it — then the local
@@ -130,6 +131,17 @@ export function ClipEditor({ jobId, clipId }: { jobId: string; clipId: string })
     },
     onError: (err) => toast.error(err.message),
   })
+  const transcribeClip = trpc.clips.transcribeClip.useMutation({
+    onError: (err) => toast.error(err.message),
+  })
+
+  /* The clip's caption lines are ALWAYS visible when a transcript exists — the
+   * captions toggle only decides whether they're styled + burned into the export.
+   * Spec segments (user-edited) win over the freshly derived lines. */
+  const captionsQuery = trpc.clips.getEditorCaptions.useQuery(
+    { organizationId: organizationId ?? '', clipId },
+    { enabled: organizationId !== undefined && Boolean(data?.clip.hasTranscript) }
+  )
 
   if (organizationId === undefined || isLoading || !spec) {
     return (
@@ -185,6 +197,39 @@ export function ClipEditor({ jobId, clipId }: { jobId: string; clipId: string })
     const res = await utils.clips.getEditorCaptions.fetch({ organizationId, clipId })
     return res.segments
   }
+  /* No transcript yet (manual cut)? Transcribe THIS clip on demand — exact
+   * spoken words, language auto-detected — then seed lines from it. Polls the
+   * same captions query the seed uses, so AI and manual clips end identical. */
+  const transcribeAndSeed = async (): Promise<
+    { startSec: number; endSec: number; text: string }[] | null
+  > => {
+    await transcribeClip.mutateAsync({ organizationId, clipId })
+    const startedAt = Date.now()
+    while (Date.now() - startedAt < 180_000) {
+      await new Promise((resolve) => setTimeout(resolve, 2500))
+      const res = await utils.client.clips.getEditorCaptions.query({ organizationId, clipId })
+      if (res.transcriptStatus === 'COMPLETED') {
+        void utils.clips.getEditor.invalidate({ organizationId, clipId })
+        return res.segments
+      }
+      if (res.transcriptStatus === 'FAILED') {
+        toast.error('Transcription failed — the clip may have no speech. Try again.')
+        return null
+      }
+    }
+    toast.error('Transcription is taking longer than expected — try again in a moment.')
+    return null
+  }
+  /* "Transcribe clip" without enabling burn — the lines just become visible. */
+  const transcribeOnly = async (): Promise<void> => {
+    setTranscribing(true)
+    try {
+      const segments = await transcribeAndSeed()
+      if (segments) void utils.clips.getEditorCaptions.invalidate({ organizationId, clipId })
+    } finally {
+      setTranscribing(false)
+    }
+  }
   const toggleCaptions = async (enabled: boolean): Promise<void> => {
     if (!enabled) {
       applySpec({
@@ -195,7 +240,20 @@ export function ClipEditor({ jobId, clipId }: { jobId: string; clipId: string })
     }
     setSeedingCaptions(true)
     try {
-      const segments = spec.captions?.segments ?? (await seedSegments())
+      let segments = spec.captions?.segments
+      if (!segments) {
+        if (data.clip.hasTranscript) {
+          segments = await seedSegments()
+        } else {
+          setTranscribing(true)
+          try {
+            segments = (await transcribeAndSeed()) ?? undefined
+          } finally {
+            setTranscribing(false)
+          }
+        }
+      }
+      if (!segments) return // transcription failed — the toast already explained
       const style: CaptionStyle = spec.captions?.style ?? DEFAULT_CAPTION_STYLE
       applySpec({ ...spec, captions: { enabled: true, style, segments } })
     } catch {
@@ -371,9 +429,12 @@ export function ClipEditor({ jobId, clipId }: { jobId: string; clipId: string })
 
           <CaptionsPanel
             captions={spec.captions}
+            viewSegments={spec.captions?.segments ?? captionsQuery.data?.segments ?? []}
             hasTranscript={data.clip.hasTranscript}
             seeding={seedingCaptions}
+            transcribing={transcribing}
             onToggle={(v) => void toggleCaptions(v)}
+            onTranscribe={() => void transcribeOnly()}
             onStyleChange={updateCaptionStyle}
             onSegmentText={updateSegmentText}
             onReset={() => void resetCaptions()}

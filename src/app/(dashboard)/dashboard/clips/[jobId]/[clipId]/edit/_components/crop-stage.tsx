@@ -209,7 +209,9 @@ export function CropStage({
               style={{
                 color: capStyle.color,
                 fontSize: `${capStyle.fontSizePct}cqh`,
-                fontFamily: capStyle.fontFamily,
+                /* Ethiopic (Amharic) fallback keeps non-Latin previews glyph-safe —
+                 * mirrors the worker image, where libass falls back the same way. */
+                fontFamily: `'${capStyle.fontFamily}', 'Noto Sans Ethiopic', sans-serif`,
                 fontWeight: 800,
                 WebkitTextStroke: '0.04em var(--background)',
               }}

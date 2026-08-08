@@ -47,7 +47,11 @@ async function handleClipRender(job: Job): Promise<void> {
   try {
     const clipEdit = await prisma.clipEdit.findUnique({
       where: { id: clipEditId },
-      include: { clip: { include: { clipJob: { select: { transcriptKey: true } } } } },
+      include: {
+        clip: {
+          include: { clipJob: { select: { transcriptKey: true } } },
+        },
+      },
     })
     if (!clipEdit) return
     /* Idempotent: a duplicate/stale delivery for an edit that's already done or
@@ -75,14 +79,23 @@ async function handleClipRender(job: Job): Promise<void> {
     })
 
     // ── Caption words (only when captions are on and the user hasn't edited the
-    //    text): the clip's transcript window, shifted to clip-relative time. ──
+    //    text): the job transcript's window shifted to clip-relative time, OR the
+    //    clip's own on-demand transcript (already clip-relative) — word-accurate
+    //    karaoke for AI and manual clips alike, in any language. ──
     let captionWords: Word[] | undefined
-    if (spec.captions?.enabled && !spec.captions.segments && clip.clipJob.transcriptKey) {
+    if (spec.captions?.enabled && !spec.captions.segments) {
       try {
-        const transcript = JSON.parse(
-          (await downloadBuffer(clip.clipJob.transcriptKey)).toString('utf8')
-        ) as Transcript
-        captionWords = sliceTranscriptWords(transcript, clip.startSec, clip.endSec)
+        if (clip.clipJob.transcriptKey) {
+          const transcript = JSON.parse(
+            (await downloadBuffer(clip.clipJob.transcriptKey)).toString('utf8')
+          ) as Transcript
+          captionWords = sliceTranscriptWords(transcript, clip.startSec, clip.endSec)
+        } else if (clip.transcriptKey && clip.transcriptStatus === 'COMPLETED') {
+          const transcript = JSON.parse(
+            (await downloadBuffer(clip.transcriptKey)).toString('utf8')
+          ) as Transcript
+          captionWords = transcript.words
+        }
       } catch {
         /* captions are best-effort — a missing/broken transcript just skips them */
       }

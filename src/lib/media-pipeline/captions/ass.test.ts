@@ -53,6 +53,20 @@ describe('buildCaptionEvents', () => {
     expect(events[0]?.words).toHaveLength(2)
   })
 
+  it('passes Amharic (Ethiopic script) through unharmed — uppercase is a no-op, no glyph loss', () => {
+    const events = buildCaptionEvents({
+      words: [
+        { text: 'ከዜሮ', start: 0, end: 0.5 },
+        { text: 'ወደ', start: 0.5, end: 0.9 },
+        { text: 'ስኬት።', start: 0.9, end: 1.5 },
+      ],
+      uppercase: true,
+      emoji: false,
+    })
+    expect(events).toHaveLength(1)
+    expect(events[0]?.words.map((w) => w.text)).toEqual(['ከዜሮ', 'ወደ', 'ስኬት።'])
+  })
+
   it('breaks a long run of words into multiple lines', () => {
     const words = Array.from({ length: 10 }, (_, i) => ({
       text: `w${i}`,
@@ -85,6 +99,7 @@ describe('compileAss', () => {
     )
     expect(out).toContain('PlayResX: 1080')
     expect(out).toContain('PlayResY: 1920')
+    expect(out).toContain('WrapStyle: 0') // smart wrap — overflow-proof for wide scripts/fonts
     expect(out).toContain('Style: Caption,Montserrat,100,')
     expect(out).toContain('Dialogue: 0,0:00:00.00,0:00:01.00,Caption,,0,0,0,,HI')
   })
@@ -96,5 +111,24 @@ describe('compileAss', () => {
       dims
     )
     expect(out).toContain('{\\kf100}HI')
+  })
+
+  it('compiles Amharic dialogue with word-synced karaoke timing intact', () => {
+    const out = compileAss(
+      [
+        {
+          start: 0,
+          end: 1.5,
+          words: [
+            { text: 'ከዜሮ', start: 0, end: 0.5 },
+            { text: 'ስኬት።', start: 0.5, end: 1.5 },
+          ],
+        },
+      ],
+      { ...style, karaoke: true },
+      dims
+    )
+    expect(out).toContain('{\\kf50}ከዜሮ')
+    expect(out).toContain('{\\kf100}ስኬት።')
   })
 })
