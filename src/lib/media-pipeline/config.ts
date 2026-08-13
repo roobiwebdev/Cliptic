@@ -119,7 +119,13 @@ export interface MediaConfig {
   openai: {
     apiKey: string
     chatModel: string
+    /** Timing model — whisper-1 is the ONLY OpenAI model with WORD-level
+     *  timestamps (captions + AI sentence boundaries need them). */
     transcribeModel: string
+    /** Accurate-text model for scripts whisper-1 can't do (e.g. Amharic, which
+     *  OpenAI's whisper API rejects and mis-transcribes). gpt-4o-transcribe has
+     *  no timestamps, so its text is aligned onto whisper's timing grid. */
+    transcribeTextModel: string
     baseURL: string | undefined
     transcribeMaxUploadMb: number
   }
@@ -193,6 +199,7 @@ export const mediaConfig: MediaConfig = {
     apiKey: env['OPENAI_API_KEY'] ?? '',
     chatModel: env['OPENAI_CHAT_MODEL'] ?? 'gpt-4o',
     transcribeModel: env['OPENAI_TRANSCRIBE_MODEL'] ?? 'whisper-1',
+    transcribeTextModel: env['OPENAI_TRANSCRIBE_TEXT_MODEL'] ?? 'gpt-4o-transcribe',
     baseURL: env['OPENAI_BASE_URL'] && env['OPENAI_BASE_URL'].trim() !== '' ? env['OPENAI_BASE_URL'] : undefined,
     transcribeMaxUploadMb: num(env['OPENAI_TRANSCRIBE_MAX_UPLOAD_MB'], 24, 'OPENAI_TRANSCRIBE_MAX_UPLOAD_MB'),
   },
