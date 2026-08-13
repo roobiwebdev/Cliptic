@@ -68,7 +68,7 @@ export class OpenAITranscriber implements Transcriber {
      * timeout — that combination is exactly what produced "Request timed out".
      * Chunking by DURATION keeps every request fast and parallelizable. */
     if (size <= maxBytes && duration <= durationCap) {
-      const chunk = await this.transcribeFile(client, audioPath, 0)
+      const chunk = await this.transcribeFile(client, audioPath, 0, duration)
       return this.assemble([chunk], duration)
     }
 
@@ -108,7 +108,7 @@ export class OpenAITranscriber implements Transcriber {
             chunkPath,
           ])
           log(`chunk ${i + 1}/${ranges.length} [${range.start.toFixed(1)}–${range.end.toFixed(1)}s]`)
-          return this.transcribeFile(client, chunkPath, range.start)
+          return this.transcribeFile(client, chunkPath, range.start, range.end - range.start)
         }
       )
       return this.assemble(chunks, duration)
@@ -119,13 +119,20 @@ export class OpenAITranscriber implements Transcriber {
 
   /**
    * Transcribe one chunk and shift timestamps by `offset`. HYBRID: whisper gives
-   * the word-timing grid; if the chunk's script is one whisper can't handle
-   * (non-Latin/unsupported, e.g. Amharic), gpt-4o-transcribe supplies the
-   * ACCURATE words and we map them onto whisper's grid so nothing is lost.
+   * the word-timing grid; unless whisper is CONFIDENTLY English, fetch the
+   * ACCURATE words from gpt-4o-transcribe (which handles Amharic + everything)
+   * and map them onto whisper's grid — so no word is dropped, whatever the
+   * language. `chunkDurationSec` bounds the fallback timeline when whisper found
+   * no words at all (so a rescue still produces timed captions).
    */
-  private async transcribeFile(client: OpenAI, filePath: string, offset: number): Promise<ChunkResult> {
+  private async transcribeFile(
+    client: OpenAI,
+    filePath: string,
+    offset: number,
+    chunkDurationSec: number
+  ): Promise<ChunkResult> {
     /* No language param unless forced — auto-detect keeps English on whisper and
-     * lets the hybrid below rescue scripts whisper can't do. */
+     * lets the rescue below handle scripts whisper can't do. */
     const res = await client.audio.transcriptions.create({
       file: createReadStream(filePath),
       model: mediaConfig.openai.transcribeModel,
@@ -141,15 +148,28 @@ export class OpenAITranscriber implements Transcriber {
       end: s.end + offset,
       text: s.text,
     }))
-
-    /* Whisper handled it (Latin/English) OR found no speech → use whisper as-is. */
-    if (whisperWords.length === 0 || !isNonLatinDominant(res.text)) {
-      return { words: whisperWords, segments: whisperSegments, text: res.text, language: res.language ?? '' }
+    const whisperResult: ChunkResult = {
+      words: whisperWords,
+      segments: whisperSegments,
+      text: res.text,
+      language: res.language ?? '',
     }
 
-    /* Non-Latin script whisper can't do reliably (e.g. Amharic): fetch the
-     * ACCURATE words from gpt-4o-transcribe and map them onto whisper's timing. */
-    log(`chunk is non-Latin ("${res.language}") — rescuing text with ${mediaConfig.openai.transcribeTextModel}`)
+    const mode = mediaConfig.transcribe.accurateText
+    if (mode === 'off') return whisperResult
+    /* DECISION on whisper's DETECTED LANGUAGE (not its text): whisper hallucinates
+     * ENGLISH words for Amharic audio (detects "amharic"/"somali" yet emits Latin
+     * gibberish), so a text-script check would wrongly skip the rescue. Rescue
+     * unless whisper is confidently English. */
+    const confidentlyEnglish =
+      whisperWords.length > 0 && isEnglishLang(res.language) && !isNonLatinDominant(res.text)
+    if (mode === 'auto' && confidentlyEnglish) return whisperResult
+
+    /* Fetch the accurate transcript (Amharic + any interspersed English, nothing
+     * dropped) and place it on the real speech timeline. */
+    log(
+      `rescuing text with ${mediaConfig.openai.transcribeTextModel} (whisper lang="${res.language}", words=${whisperWords.length})`
+    )
     let accurate: string
     try {
       const t = await client.audio.transcriptions.create({
@@ -157,21 +177,26 @@ export class OpenAITranscriber implements Transcriber {
         model: mediaConfig.openai.transcribeTextModel,
         response_format: 'json',
       })
-      accurate = t.text ?? ''
+      accurate = (t.text ?? '').trim()
     } catch (err) {
       log(`accurate-text model failed (${err instanceof Error ? err.message : String(err)}); keeping whisper output`)
-      return { words: whisperWords, segments: whisperSegments, text: res.text, language: res.language ?? '' }
+      return whisperResult
     }
-    if (!accurate.trim()) {
-      return { words: whisperWords, segments: whisperSegments, text: res.text, language: res.language ?? '' }
-    }
+    if (!accurate) return whisperResult
 
-    const words = alignAccurateWords(accurate, gridWords, offset)
+    /* Map accurate words onto whisper's grid; if whisper found NO words (the
+     * "no speech" case), spread them evenly across the chunk window instead. */
+    const words =
+      gridWords.length > 0
+        ? alignAccurateWords(accurate, gridWords, offset)
+        : distributeWordsEvenly(accurate, offset, offset + Math.max(0.5, chunkDurationSec))
+    if (words.length === 0) return whisperResult
     const first = words[0]
     const last = words[words.length - 1]
     const segments: TranscriptSegment[] =
-      first && last ? [{ start: first.start, end: last.end, text: accurate.trim() }] : []
-    return { words, segments, text: accurate.trim(), language: scriptLanguage(accurate) }
+      first && last ? [{ start: first.start, end: last.end, text: accurate }] : []
+    const language = isNonLatinDominant(accurate) ? scriptLanguage(accurate) : res.language || 'english'
+    return { words, segments, text: accurate, language }
   }
 
   /** Merge chunk results into a single, time-ordered Transcript. */
@@ -249,6 +274,37 @@ export function alignAccurateWords(
     const text = tokens[i]
     if (text) words.push({ text, start, end })
   }
+  return words
+}
+
+/* Whisper's detected-language label for English (it returns names like "english"). */
+export function isEnglishLang(language: string | null | undefined): boolean {
+  const l = (language ?? '').trim().toLowerCase()
+  return l === '' || l === 'english' || l === 'en' || l === 'eng'
+}
+
+/**
+ * SOURCE OF TRUTH KEYWORDS: distributeWordsEvenly
+ *
+ * WHAT:  Spread accurate words evenly (char-length weighted) across [start,end]
+ *        when there is NO whisper timing grid (whisper found no words).
+ * WHY:   Guarantees a rescued chunk still yields TIMED captions instead of a
+ *        "no speech" failure — the exact case that failed for some Amharic clips.
+ */
+export function distributeWordsEvenly(text: string, start: number, end: number): Word[] {
+  const tokens = text.trim().split(/\s+/).filter(Boolean)
+  if (tokens.length === 0) return []
+  const totalChars = tokens.reduce((n, t) => n + t.length, 0) || 1
+  const span = Math.max(0.1, end - start)
+  const words: Word[] = []
+  let cursor = start
+  for (const token of tokens) {
+    const dur = (token.length / totalChars) * span
+    words.push({ text: token, start: cursor, end: cursor + dur })
+    cursor += dur
+  }
+  const last = words[words.length - 1]
+  if (last) last.end = end
   return words
 }
 
