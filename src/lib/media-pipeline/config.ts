@@ -167,6 +167,15 @@ export interface MediaConfig {
   transcribe: {
     /** Concurrent Whisper requests for long (chunked) audio. */
     concurrency: number
+    /** Max seconds of audio per Whisper chunk (TRANSCRIBE_MAX_CHUNK_SEC, default
+     *  600 = 10 min). Long podcasts were chunked only by the 24MB upload cap,
+     *  which at low audio bitrate is ~100 min per chunk — far too long to finish
+     *  inside the request timeout ("Request timed out"). Capping by DURATION
+     *  keeps every request fast and lets chunks parallelize. */
+    maxChunkSec: number
+    /** Per-request timeout in ms (TRANSCRIBE_TIMEOUT_MS, default 300000 = 5 min).
+     *  A safety margin above the per-chunk transcribe time. */
+    timeoutMs: number
   }
 }
 
@@ -234,6 +243,8 @@ export const mediaConfig: MediaConfig = {
   },
   transcribe: {
     concurrency: num(env['TRANSCRIBE_CONCURRENCY'], 4, 'TRANSCRIBE_CONCURRENCY'),
+    maxChunkSec: num(env['TRANSCRIBE_MAX_CHUNK_SEC'], 600, 'TRANSCRIBE_MAX_CHUNK_SEC'),
+    timeoutMs: num(env['TRANSCRIBE_TIMEOUT_MS'], 300_000, 'TRANSCRIBE_TIMEOUT_MS'),
   },
 }
 
