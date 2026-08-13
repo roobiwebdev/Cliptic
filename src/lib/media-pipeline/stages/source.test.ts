@@ -6,7 +6,7 @@
  */
 
 import { describe, it, expect } from 'vitest'
-import { parseYouTubeVideoId } from './source'
+import { parseYouTubeVideoId, classifyYoutubeError } from './source'
 
 describe('parseYouTubeVideoId', () => {
   it('reads the id from youtu.be short links (incl. ?si= tracking)', () => {
@@ -33,5 +33,31 @@ describe('parseYouTubeVideoId', () => {
     expect(a.startsWith('yt-')).toBe(true)
     // a youtu.be path that isn't a valid 11-char id also falls back
     expect(parseYouTubeVideoId('https://youtu.be/short').startsWith('yt-')).toBe(true)
+  })
+})
+
+describe('classifyYoutubeError', () => {
+  it('maps the bot wall (sign-in / 429) to actionable cookies guidance', () => {
+    const raw =
+      'yt-dlp exited with code 1:\nERROR: [youtube] X: Sign in to confirm you’re not a bot. Use --cookies'
+    const msg = classifyYoutubeError(raw)
+    expect(msg.toLowerCase()).toContain('bot')
+    expect(msg).toContain('YTDLP_COOKIES')
+  })
+
+  it('maps a bare HTTP 429 to rate-limit/cookies guidance', () => {
+    expect(classifyYoutubeError('HTTP Error 429: Too Many Requests')).toContain('YTDLP_COOKIES')
+  })
+
+  it('recognizes private, unavailable, and age-restricted videos distinctly', () => {
+    expect(classifyYoutubeError('ERROR: Private video. Sign in if granted access').toLowerCase()).toContain('private')
+    expect(classifyYoutubeError('ERROR: Video unavailable. This video has been removed').toLowerCase()).toContain('unavailable')
+    expect(
+      classifyYoutubeError('ERROR: Sign in to confirm your age. This video may be inappropriate').toLowerCase()
+    ).toContain('age-restricted')
+  })
+
+  it('never swallows an unknown failure — keeps a raw tail', () => {
+    expect(classifyYoutubeError('ERROR: some brand new failure mode')).toContain('some brand new failure mode')
   })
 })
