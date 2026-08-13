@@ -17,8 +17,36 @@ import { describe, it, expect } from 'vitest'
 import {
   alignAccurateWords,
   isNonLatinDominant,
+  isEnglishLang,
+  distributeWordsEvenly,
   scriptLanguage,
 } from './openai'
+
+describe('isEnglishLang', () => {
+  it('treats english / en / empty as English (no rescue)', () => {
+    expect(isEnglishLang('english')).toBe(true)
+    expect(isEnglishLang('en')).toBe(true)
+    expect(isEnglishLang('')).toBe(true)
+    expect(isEnglishLang(null)).toBe(true)
+  })
+  it('treats any other detected language as non-English (triggers rescue)', () => {
+    // The key bug: whisper detects "amharic" but hallucinates English text.
+    expect(isEnglishLang('amharic')).toBe(false)
+    expect(isEnglishLang('somali')).toBe(false)
+  })
+})
+
+describe('distributeWordsEvenly', () => {
+  it('spreads words across the window when there is no whisper grid (no "no speech")', () => {
+    const words = distributeWordsEvenly('ሚኒስትር አብይ አህመድ', 5, 8)
+    expect(words.map((w) => w.text)).toEqual(['ሚኒስትር', 'አብይ', 'አህመድ'])
+    expect(words[0]?.start).toBe(5)
+    expect(words[words.length - 1]?.end).toBe(8)
+  })
+  it('returns nothing for empty text', () => {
+    expect(distributeWordsEvenly('  ', 0, 5)).toEqual([])
+  })
+})
 
 describe('isNonLatinDominant', () => {
   it('is false for English (routes to whisper, no regression)', () => {
