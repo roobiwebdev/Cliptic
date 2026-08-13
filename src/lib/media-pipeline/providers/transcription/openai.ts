@@ -46,25 +46,33 @@ export class OpenAITranscriber implements Transcriber {
       apiKey: requireOpenAIKey(),
       baseURL: mediaConfig.openai.baseURL,
       maxRetries: 4,
-      timeout: 180_000,
+      timeout: mediaConfig.transcribe.timeoutMs,
     })
     const duration = await probeDuration(audioPath)
     const { size } = await stat(audioPath)
 
     const maxBytes = mediaConfig.openai.transcribeMaxUploadMb * 1024 * 1024
-    if (size <= maxBytes) {
+    const durationCap = mediaConfig.transcribe.maxChunkSec
+    /* Single request ONLY when the audio fits BOTH the upload cap AND the
+     * duration cap. A long podcast can be small enough to upload in one piece
+     * (low-bitrate audio) yet far too long to transcribe within the request
+     * timeout — that combination is exactly what produced "Request timed out".
+     * Chunking by DURATION keeps every request fast and parallelizable. */
+    if (size <= maxBytes && duration <= durationCap) {
       const chunk = await this.transcribeFile(client, audioPath, 0)
       return this.assemble([chunk], duration)
     }
 
-    /* Bytes-per-second from the ACTUAL file (codec-agnostic) so chunk sizing is
-     * correct whether the audio is WAV or compressed mp3. */
+    /* Bytes-per-second from the ACTUAL file (codec-agnostic) so size-based chunk
+     * sizing is correct whether the audio is WAV or compressed mp3. */
     const bytesPerSec = size / Math.max(1, duration)
-    const maxChunkSec = maxBytes / bytesPerSec
-    const targetChunkSec = Math.max(SNAP_WINDOW_SEC * 2, maxChunkSec - SNAP_WINDOW_SEC - 5)
+    const sizeChunkSec = maxBytes / bytesPerSec - SNAP_WINDOW_SEC - 5
+    /* Take the SMALLER of the size cap and the duration cap — duration is what
+     * bounds request time (and thus timeouts) for long, low-bitrate audio. */
+    const targetChunkSec = Math.max(SNAP_WINDOW_SEC * 2, Math.min(sizeChunkSec, durationCap))
 
     log(
-      `audio is ${(size / 1024 / 1024).toFixed(1)} MB — splitting on silence (~${Math.round(targetChunkSec)}s chunks), ${mediaConfig.transcribe.concurrency} concurrent`
+      `audio is ${(size / 1024 / 1024).toFixed(1)} MB / ${Math.round(duration)}s — splitting on silence (~${Math.round(targetChunkSec)}s chunks), ${mediaConfig.transcribe.concurrency} concurrent`
     )
     const ranges = await this.planChunks(audioPath, duration, targetChunkSec)
     const chunkDir = path.join(path.dirname(audioPath), 'chunks')
