@@ -149,6 +149,13 @@ function ytdlpAuthArgs(): string[] {
   if (mediaConfig.download.potBaseUrl) {
     args.push('--extractor-args', `youtubepot-bgutilhttp:base_url=${mediaConfig.download.potBaseUrl}`)
   }
+  /* EJS challenge solver: YouTube now requires solving a JS "n challenge" to get
+   * working format URLs — without it every download fails with "no downloadable
+   * format". yt-dlp fetches + caches the solver once (needs the Deno runtime the
+   * worker image ships). This is the current keystone of YouTube extraction. */
+  if (mediaConfig.download.remoteComponents) {
+    args.push('--remote-components', mediaConfig.download.remoteComponents)
+  }
   return args
 }
 
