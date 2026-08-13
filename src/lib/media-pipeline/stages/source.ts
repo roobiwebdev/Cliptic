@@ -29,6 +29,60 @@ import type { Source } from '../types'
 const log = createLogger('source')
 
 /**
+ * SOURCE OF TRUTH KEYWORDS: classifyYoutubeError, YoutubeDownloadError, bot check,
+ *   429, sign in to confirm, download error classification
+ *
+ * WHAT:  Turn a raw yt-dlp failure (now carrying real stderr — see lib/exec.ts)
+ *        into a SHORT, user-safe, ACTIONABLE message. Unknown failures keep a
+ *        trimmed raw tail so nothing is hidden.
+ * WHY:   "yt-dlp exited with code 1" told the user nothing. The dominant real
+ *        cause is YouTube's bot wall (429 + "sign in to confirm you're not a
+ *        bot"), which needs authenticated cookies — the message now says so.
+ * WHERE: Wraps every yt-dlp call in this stage; the worker stores the message
+ *        on ClipJob.error (already user-facing).
+ */
+export class YoutubeDownloadError extends Error {}
+
+export function classifyYoutubeError(raw: string): string {
+  const r = raw.toLowerCase()
+  /* Age FIRST: YouTube's age gate also says "sign in to confirm your age", which
+   * would otherwise be caught by the bot-wall rule below. */
+  if (/age.?restricted|confirm your age|inappropriate/.test(r)) {
+    return 'This video is age-restricted; downloading it requires authenticated YouTube cookies (YTDLP_COOKIES).'
+  }
+  if (/sign in to confirm|not a bot|429|too many requests/.test(r)) {
+    return (
+      'YouTube is blocking automated downloads for this video right now (bot check / rate limit). ' +
+      'This is fixed with authenticated YouTube cookies (YTDLP_COOKIES) on the worker — a signed-in ' +
+      'session that YouTube trusts. If cookies are already set, they may have expired; refresh them. ' +
+      'You can also wait a few minutes and retry.'
+    )
+  }
+  if (/private video/.test(r)) return 'This video is private, so it can’t be downloaded.'
+  if (/members-only|join this channel/.test(r)) return 'This is a members-only video, so it can’t be downloaded.'
+  if (/video unavailable|has been removed|no longer available|not available in your/.test(r)) {
+    return 'This video is unavailable (removed, private, or region-blocked).'
+  }
+  if (/requested format is not available|no video formats/.test(r)) {
+    return 'No downloadable video format was available for this URL.'
+  }
+  if (/unsupported url|is not a valid url/.test(r)) return 'That link isn’t a supported video URL.'
+  /* Unknown — keep the real tail so failures are never opaque again. */
+  const tail = raw.split('\n').filter(Boolean).slice(-3).join(' ').slice(0, 400)
+  return `Could not download the video. ${tail}`.trim()
+}
+
+/** Run a yt-dlp download, re-throwing failures as a classified, user-safe error. */
+async function runYtdlp(bin: string, args: string[], onLine: (line: string) => void): Promise<void> {
+  try {
+    await runWithProgress(bin, args, onLine)
+  } catch (err) {
+    const raw = err instanceof Error ? err.message : String(err)
+    throw new YoutubeDownloadError(classifyYoutubeError(raw))
+  }
+}
+
+/**
  * SOURCE OF TRUTH KEYWORDS: parseYouTubeVideoId, youtube video id, url parse
  *
  * WHAT:  Extract the 11-char YouTube video id straight from the URL (youtu.be,
@@ -126,6 +180,15 @@ function ytdlpNetworkArgs(): string[] {
     '100K',
     '--retries',
     '10',
+    /* Bot-wall resilience: retry the EXTRACTION step (not just the download)
+     * and sleep between attempts so a transient HTTP 429 self-recovers instead
+     * of failing the whole job. */
+    '--extractor-retries',
+    '3',
+    '--retry-sleep',
+    'http:exp=2:30',
+    '--sleep-requests',
+    '1',
     '--concurrent-fragments',
     '4',
     ...ytdlpAuthArgs(),
@@ -161,7 +224,7 @@ async function resolveYoutube(params: ResolveSourceParams): Promise<Source> {
   const audioPath = path.join(scratchDir, 'audio.mp3')
 
   log(`downloading source once (≤${maxHeight}p): ${url}`)
-  await runWithProgress(
+  await runYtdlp(
     bin,
     [
       '-f',
@@ -215,7 +278,7 @@ export async function resolveYoutubeSection(params: ResolveSectionParams): Promi
   const audioPath = path.join(scratchDir, 'section-audio.mp3')
 
   log(`downloading section ${start.toFixed(1)}–${end.toFixed(1)}s (≤${maxHeight}p): ${url}`)
-  await runWithProgress(
+  await runYtdlp(
     bin,
     [
       '-f',
@@ -232,6 +295,11 @@ export async function resolveYoutubeSection(params: ResolveSectionParams): Promi
       '--newline',
       '--retries',
       '10',
+      /* Same bot-wall resilience as the full download (survives transient 429). */
+      '--extractor-retries',
+      '3',
+      '--retry-sleep',
+      'http:exp=2:30',
       ...ytdlpAuthArgs(),
       '-o',
       videoPath,
