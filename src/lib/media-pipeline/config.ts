@@ -146,6 +146,13 @@ export interface MediaConfig {
      *  image to the in-container provider; unset locally. When set, yt-dlp fetches
      *  PO tokens from it (via the bgutil plugin) to pass YouTube's bot checks. */
     potBaseUrl: string | undefined
+    /** yt-dlp EJS challenge-solver component (YTDLP_REMOTE_COMPONENTS, default
+     *  'ejs:github'). YouTube now requires solving a JS "n challenge" to get
+     *  working format URLs; without the solver every download fails with "no
+     *  downloadable format". yt-dlp fetches + caches the solver once (needs the
+     *  Deno runtime, which the worker image ships). Set to 'ejs:npm' if GitHub
+     *  is blocked, or 'off' to disable. */
+    remoteComponents: string | undefined
     /** Cap source resolution to keep the single download small (720 default). */
     maxHeight: number
   }
@@ -212,6 +219,11 @@ export const mediaConfig: MediaConfig = {
       env['BGUTIL_POT_BASE_URL'] && env['BGUTIL_POT_BASE_URL'].trim() !== ''
         ? env['BGUTIL_POT_BASE_URL'].trim()
         : undefined,
+    remoteComponents: (() => {
+      const v = cleanEnv(env['YTDLP_REMOTE_COMPONENTS'])
+      if (v === '') return 'ejs:github' // required for YouTube n-challenge solving
+      return v.toLowerCase() === 'off' ? undefined : v
+    })(),
     maxHeight: num(env['CLIP_SOURCE_MAX_HEIGHT'], 720, 'CLIP_SOURCE_MAX_HEIGHT'),
   },
   encode: {
