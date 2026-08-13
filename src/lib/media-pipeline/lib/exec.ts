@@ -6,12 +6,15 @@
  */
 
 /**
- * SOURCE OF TRUTH KEYWORDS: run, capture, captureAll
+ * SOURCE OF TRUTH KEYWORDS: run, capture, captureAll, runWithProgress, tailBuffer
  *
  * WHAT:  Thin child_process wrappers — the ONLY place the pipeline shells out to
  *        yt-dlp / ffmpeg / ffprobe.
  * WHY:   run() streams to stdout (progress), capture() collects stdout (probes),
  *        captureAll() returns both streams (ffmpeg silencedetect writes stderr).
+ *        runWithProgress() streams progress AND keeps a tail of output so a
+ *        non-zero exit surfaces the REAL error (e.g. yt-dlp's "Sign in to confirm
+ *        you're not a bot" / HTTP 429) instead of a bare "exited with code 1".
  *        All fail loudly when a binary is missing.
  * WHERE: Used by the media-pipeline lib + stages.
  */
@@ -19,6 +22,31 @@
 import { spawn, spawnSync } from 'node:child_process'
 
 const commandExistsCache = new Map<string, boolean>()
+
+/** How many trailing output lines to keep for a failure message. */
+const ERROR_TAIL_LINES = 40
+
+/**
+ * SOURCE OF TRUTH KEYWORDS: tailBuffer
+ *
+ * WHAT:  A bounded ring of the most recent output lines, for building a
+ *        meaningful error when a streamed command exits non-zero.
+ * WHY:   Progress output is huge and mostly noise; on failure we only want the
+ *        last few dozen lines (where yt-dlp/ffmpeg print the actual reason).
+ */
+class TailBuffer {
+  private readonly lines: string[] = []
+  push(line: string): void {
+    this.lines.push(line)
+    if (this.lines.length > ERROR_TAIL_LINES) this.lines.shift()
+  }
+  /** Prefer ERROR/WARNING lines; fall back to the raw tail. */
+  meaningful(): string {
+    const flagged = this.lines.filter((l) => /error|warning|forbidden|unable|unavailable|http error|sign in|not a bot|private|age/i.test(l))
+    const pick = flagged.length > 0 ? flagged : this.lines
+    return pick.slice(-8).join('\n').slice(0, 1500)
+  }
+}
 
 /**
  * Whether a binary is on PATH (cached). Used to auto-pick aria2c when present.
@@ -67,6 +95,7 @@ export function runWithProgress(
 ): Promise<void> {
   return new Promise((resolve, reject) => {
     const child = spawn(cmd, args, { stdio: ['ignore', 'pipe', 'pipe'] })
+    const tail = new TailBuffer()
     let buffer = ''
     const handle = (chunk: Buffer) => {
       buffer += chunk.toString()
@@ -74,15 +103,20 @@ export function runWithProgress(
       buffer = parts.pop() ?? ''
       for (const line of parts) {
         const trimmed = line.trim()
-        if (trimmed) onLine(trimmed)
+        if (trimmed) {
+          tail.push(trimmed)
+          onLine(trimmed)
+        }
       }
     }
     child.stdout?.on('data', handle)
     child.stderr?.on('data', handle)
     child.on('error', (err) => reject(friendly(cmd, err)))
-    child.on('close', (code) =>
-      code === 0 ? resolve() : reject(new Error(`${cmd} exited with code ${code}`))
-    )
+    child.on('close', (code) => {
+      if (code === 0) return resolve()
+      const detail = tail.meaningful()
+      reject(new Error(`${cmd} exited with code ${code}${detail ? `:\n${detail}` : ''}`))
+    })
   })
 }
 
