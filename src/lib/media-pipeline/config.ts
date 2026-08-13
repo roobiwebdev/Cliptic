@@ -119,7 +119,13 @@ export interface MediaConfig {
   openai: {
     apiKey: string
     chatModel: string
+    /** Timing model — whisper-1 is the ONLY OpenAI model with WORD-level
+     *  timestamps (captions + AI sentence boundaries need them). */
     transcribeModel: string
+    /** Accurate-text model for scripts whisper-1 can't do (e.g. Amharic, which
+     *  OpenAI's whisper API rejects and mis-transcribes). gpt-4o-transcribe has
+     *  no timestamps, so its text is aligned onto whisper's timing grid. */
+    transcribeTextModel: string
     baseURL: string | undefined
     transcribeMaxUploadMb: number
   }
@@ -176,6 +182,15 @@ export interface MediaConfig {
     /** Per-request timeout in ms (TRANSCRIBE_TIMEOUT_MS, default 300000 = 5 min).
      *  A safety margin above the per-chunk transcribe time. */
     timeoutMs: number
+    /** When to fetch accurate text from the text model for scripts whisper can't
+     *  do (TRANSCRIBE_ACCURATE_TEXT):
+     *   - 'auto' (default): rescue whenever whisper is NOT confidently English
+     *     (non-English detected language, non-Latin text, or zero words) — fixes
+     *     Amharic (incl. whisper hallucinating English for it) while keeping
+     *     English on whisper alone (precise, cheap).
+     *   - 'always': rescue every chunk (max robustness, ~2x transcribe cost).
+     *   - 'off': whisper only (previous behavior). */
+    accurateText: 'auto' | 'always' | 'off'
   }
 }
 
@@ -193,6 +208,7 @@ export const mediaConfig: MediaConfig = {
     apiKey: env['OPENAI_API_KEY'] ?? '',
     chatModel: env['OPENAI_CHAT_MODEL'] ?? 'gpt-4o',
     transcribeModel: env['OPENAI_TRANSCRIBE_MODEL'] ?? 'whisper-1',
+    transcribeTextModel: env['OPENAI_TRANSCRIBE_TEXT_MODEL'] ?? 'gpt-4o-transcribe',
     baseURL: env['OPENAI_BASE_URL'] && env['OPENAI_BASE_URL'].trim() !== '' ? env['OPENAI_BASE_URL'] : undefined,
     transcribeMaxUploadMb: num(env['OPENAI_TRANSCRIBE_MAX_UPLOAD_MB'], 24, 'OPENAI_TRANSCRIBE_MAX_UPLOAD_MB'),
   },
@@ -245,6 +261,12 @@ export const mediaConfig: MediaConfig = {
     concurrency: num(env['TRANSCRIBE_CONCURRENCY'], 4, 'TRANSCRIBE_CONCURRENCY'),
     maxChunkSec: num(env['TRANSCRIBE_MAX_CHUNK_SEC'], 600, 'TRANSCRIBE_MAX_CHUNK_SEC'),
     timeoutMs: num(env['TRANSCRIBE_TIMEOUT_MS'], 300_000, 'TRANSCRIBE_TIMEOUT_MS'),
+    accurateText: pickEnum(
+      env['TRANSCRIBE_ACCURATE_TEXT'],
+      ['auto', 'always', 'off'] as const,
+      'auto',
+      'TRANSCRIBE_ACCURATE_TEXT'
+    ),
   },
 }
 
