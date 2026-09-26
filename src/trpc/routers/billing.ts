@@ -9,8 +9,10 @@
  * SOURCE OF TRUTH KEYWORDS: billingRouter
  *
  * WHAT:  Stripe billing — read current plan + payment methods, create a
- *        subscription (custom Elements flow), manage payment methods, and
- *        cancel / reactivate / upgrade.
+ *        subscription (custom Elements flow), manage payment methods,
+ *        cancel / reactivate / upgrade, and retry a failed payment
+ *        (past_due recovery). Every Stripe object created here carries
+ *        metadata.platform = STRIPE_PLATFORM (shared-account isolation).
  * WHY:   Built on protectedProcedure so auth + billing:* permission gates +
  *        audit are automatic. The DB Subscription row is written by the webhook
  *        (the single writer), not these handlers — mutations here only talk to
@@ -37,6 +39,7 @@ import {
   isStripeConfigured,
   getPlanPriceId,
   PLANS,
+  STRIPE_PLATFORM,
 } from '@/lib/config'
 import { getOrganizationTier } from '@/lib/feature-gate'
 import {
@@ -47,6 +50,7 @@ import {
   setDefaultPaymentMethod,
   detachPaymentMethod,
   getOrganizationSubscription,
+  payLatestOpenInvoice,
 } from '@/services/payment.service'
 import {
   hasUserAnyTrialUsedFingerprint,
@@ -168,8 +172,14 @@ export const billingRouter = createTRPCRouter({
         /* Persist the card as the customer default so renewals charge it. */
         payment_settings: { save_default_payment_method: 'on_subscription' },
         /* userId is read by the webhook to mark the trial consumed once Stripe
-         * confirms the subscription is trialing. */
-        metadata: { organizationId: input.organizationId, planKey: input.planKey, userId },
+         * confirms the subscription is trialing. `platform` isolates Cliptic's
+         * objects inside the shared Stripe account (see STRIPE_PLATFORM). */
+        metadata: {
+          organizationId: input.organizationId,
+          planKey: input.planKey,
+          userId,
+          platform: STRIPE_PLATFORM,
+        },
         ...(shouldApplyTrial
           ? { trial_period_days: trialDays, payment_behavior: 'default_incomplete' }
           : { payment_behavior: 'error_if_incomplete' }),
@@ -229,6 +239,32 @@ export const billingRouter = createTRPCRouter({
         throw new TRPCError({
           code: 'FORBIDDEN',
           message: 'That payment method does not belong to this organization',
+        })
+      }
+      return { success: true }
+    }),
+
+  /* past_due recovery: pay the open invoice now instead of waiting for the
+   * next Smart Retry — optionally with a different card. The webhook flips the
+   * row back to active once Stripe confirms. */
+  retryPayment: protectedProcedure({
+    requirePermission: permissions.BILLING_UPDATE,
+    audit: { entity: 'subscription', action: 'retryPayment' },
+  })
+    .input(orgInput.extend({ paymentMethodId: paymentMethodIdSchema.optional() }))
+    .mutation(async ({ input }) => {
+      ensureConfigured()
+      const result = await payLatestOpenInvoice(input.organizationId, input.paymentMethodId)
+      if (result.declineMessage) {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: `Payment failed: ${result.declineMessage}`,
+        })
+      }
+      if (!result.paid) {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: 'No outstanding payment to retry',
         })
       }
       return { success: true }
@@ -309,7 +345,11 @@ export const billingRouter = createTRPCRouter({
         await stripe.subscriptions.update(subscription.stripeSubscriptionId, {
           items: [{ id: itemId, price: priceId }],
           proration_behavior: 'always_invoice',
-          metadata: { organizationId: input.organizationId, planKey: input.planKey },
+          metadata: {
+            organizationId: input.organizationId,
+            planKey: input.planKey,
+            platform: STRIPE_PLATFORM,
+          },
           ...(current.status === 'trialing' ? { trial_end: 'now' as const } : {}),
         })
         return { subscriptionId: subscription.stripeSubscriptionId, status: 'updated' }
@@ -323,7 +363,11 @@ export const billingRouter = createTRPCRouter({
         /* Charges the customer's existing default payment method and keeps it
          * as default for renewals. */
         payment_settings: { save_default_payment_method: 'on_subscription' },
-        metadata: { organizationId: input.organizationId, planKey: input.planKey },
+        metadata: {
+          organizationId: input.organizationId,
+          planKey: input.planKey,
+          platform: STRIPE_PLATFORM,
+        },
         expand: ['latest_invoice.payment_intent'],
       })
       return { subscriptionId: created.id, status: created.status }

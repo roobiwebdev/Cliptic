@@ -60,6 +60,25 @@ export type FeatureGateData = {
   featureName: string
 }
 
+/**
+ * SOURCE OF TRUTH KEYWORDS: SubscriptionStateSummary, BillingAlertBanner
+ *
+ * WHAT:  The minimal subscription state every org member may read — enough to
+ *        render dunning / trial-countdown / cancellation banners, nothing more
+ *        (no Stripe ids, no billing permissions required).
+ * WHY:   billing.getSubscription requires billing:read, so ordinary members
+ *        can't call it; the layout banner still needs these four fields.
+ *        Shipping them on getFeatureGates reuses the already-prefetched query.
+ * WHERE: Returned by getFeatureGates; consumed by the global
+ *        BillingAlertBanner component.
+ */
+export type SubscriptionStateSummary = {
+  status: string
+  periodEnd: Date | null
+  cancelAtPeriodEnd: boolean | null
+  trialEnd: Date | null
+}
+
 export type OrganizationTier =
   | {
       /* `free` (no/lapsed subscription) and `portal` (platform-admin org) both
@@ -78,9 +97,26 @@ export type OrganizationTier =
         status: string
         periodEnd: Date | null
         cancelAtPeriodEnd: boolean | null
+        trialEnd: Date | null
         stripeSubscriptionId: string | null
       }
     }
+
+/**
+ * SOURCE OF TRUTH KEYWORDS: ACCESS_GRANTING_STATUSES, SubscriptionStatusPolicy
+ *
+ * WHAT:  The ONLY Stripe subscription statuses that grant the paid tier.
+ * WHY:   The status → access policy for the whole app:
+ *          active      → full access
+ *          trialing    → full access minus availableOnFreeTrial:false resources
+ *          past_due    → full access + dunning warning (Stripe Smart Retries
+ *                        run; access drops when Stripe cancels the subscription)
+ *          incomplete / incomplete_expired / unpaid / canceled / paused →
+ *                        free tier (an unpaid first invoice must never grant
+ *                        paid access, even while periodEnd is in the future)
+ * WHERE: getOrganizationTier below; the billing UI renders the matching states.
+ */
+const ACCESS_GRANTING_STATUSES = ['active', 'trialing', 'past_due'] as const
 
 const isPlanKey = (value: string): value is PlanKey =>
   (PLAN_KEYS as readonly string[]).includes(value)
@@ -180,6 +216,13 @@ export const getOrganizationTier = cache(
      * subscription row — a subscription claiming it is treated as free. */
     if (rawPlan === 'portal') return freeTier
 
+    /* Status gate FIRST: an incomplete/unpaid/canceled row never grants paid
+     * access, even when its periodEnd is still in the future (see
+     * ACCESS_GRANTING_STATUSES for the full policy table). */
+    if (!(ACCESS_GRANTING_STATUSES as readonly string[]).includes(subscription.status)) {
+      return freeTier
+    }
+
     const now = new Date()
     if (subscription.periodEnd && subscription.periodEnd < now) return freeTier
 
@@ -199,6 +242,7 @@ export const getOrganizationTier = cache(
         status: subscription.status,
         periodEnd: subscription.periodEnd,
         cancelAtPeriodEnd: subscription.cancelAtPeriodEnd,
+        trialEnd: subscription.trialEnd,
         stripeSubscriptionId: subscription.stripeSubscriptionId,
       },
     }
@@ -283,10 +327,22 @@ export const getFeatureGates = cache(async (organizationId: string) => {
     }
   }
 
+  /* Minimal per-member subscription state for layout banners — deliberately
+   * excludes Stripe ids (those stay behind billing:read). */
+  const subscription: SubscriptionStateSummary | null = tierData.subscription
+    ? {
+        status: tierData.subscription.status,
+        periodEnd: tierData.subscription.periodEnd,
+        cancelAtPeriodEnd: tierData.subscription.cancelAtPeriodEnd,
+        trialEnd: tierData.subscription.trialEnd,
+      }
+    : null
+
   return {
     tier: tierData.tier,
     planName: tierData.planName,
     isOnTrial: tierData.isOnTrial,
+    subscription,
     gates,
   }
 })
