@@ -7,7 +7,7 @@
 
 /**
  * SOURCE OF TRUTH KEYWORDS: ClipJobListItem, ClipJobDetail, ClipItem,
- *   STAGE_STEPS, isActiveStatus, statusLabel, statusBadgeVariant
+ *   STAGE_STEPS, STAGE_HINTS, isActiveStatus, statusLabel, statusBadgeVariant
  *
  * WHAT:  Shared client-side types + presentation helpers for the clips UI.
  * WHY:   Types derive from the router output (no hand-rolled DTOs); the label /
@@ -32,6 +32,25 @@ export const STAGE_STEPS = [
   { key: 'ANALYZING', label: 'Analyze' },
   { key: 'CUTTING', label: 'Cut' },
 ] as const
+
+/* Rotating flavour lines per stage — keeps the panel feeling alive during the
+ * stages that don't emit granular server progress. Also voiced by the
+ * landing hero film so its progress panel reads like the real one. */
+export const STAGE_HINTS: Record<string, readonly string[]> = {
+  QUEUED: ['Waiting for a free worker…'],
+  DOWNLOADING: ['Fetching just the audio (fast & light)…', 'No full video download needed…'],
+  TRANSCRIBING: [
+    'Transcribing speech to text…',
+    'Aligning every word to a timestamp…',
+    'Longer videos take a little longer…',
+  ],
+  ANALYZING: [
+    'Reading the full transcript…',
+    'Finding the most viral moments…',
+    'Scoring hooks, payoffs & emotion…',
+  ],
+  CUTTING: ['Rendering clips…', 'Snapping edits to natural pauses…', 'Almost there…'],
+}
 
 /* Manual jobs never run the LLM analyze stage: ingest (download + transcribe),
  * then cut the user's exact range. */
