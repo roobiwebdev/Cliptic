@@ -6,19 +6,20 @@
  */
 
 /**
- * SOURCE OF TRUTH KEYWORDS: LandingHero
+ * SOURCE OF TRUTH KEYWORDS: LandingHero, HeroFilm
  *
- * WHAT:  Landing hero — giant gradient Cliptic wordmark, tagline, CTAs, and a
- *        frosted "clip result" preview card.
+ * WHAT:  Landing hero — giant gradient Cliptic wordmark, tagline, CTAs, and the
+ *        code-drawn product film (HeroFilm) showing a link become clips.
  * WHERE: Rendered by the landing page.
  */
 
 import Link from 'next/link'
-import { ArrowRight, Download, Scissors } from 'lucide-react'
+import { ArrowRight, Scissors } from 'lucide-react'
 
 import { buttonVariants } from '@/components/ui/button'
 import { AUTH_ROUTES } from '@/lib/config'
 import { cn } from '@/lib/utils'
+import { HeroFilm } from './hero-film'
 
 export function LandingHero() {
   return (
@@ -59,40 +60,8 @@ export function LandingHero() {
       </div>
       <p className="text-muted-foreground mt-4 text-xs">No credit card · Free plan included</p>
 
-      {/* Frosted clip-result preview. */}
-      <div className="glass-strong glow-primary mt-16 w-full max-w-2xl rounded-3xl p-3 text-left sm:p-4">
-        <div className="mb-3 flex items-center gap-2 px-2 pt-1">
-          <span className="flex size-6 items-center justify-center rounded-md bg-primary text-primary-foreground">
-            <Scissors className="size-3.5" />
-          </span>
-          <span className="text-sm font-medium">youtu.be/…</span>
-          <span className="glass text-muted-foreground ml-auto rounded-full px-2.5 py-0.5 text-xs">
-            Done in 2:14
-          </span>
-        </div>
-        <div className="grid gap-3 sm:grid-cols-2">
-          {[1, 2].map((i) => (
-            <div key={i} className="glass overflow-hidden rounded-2xl">
-              <div className="relative flex aspect-video items-center justify-center bg-foreground/[0.03]">
-                <span className="flex size-11 items-center justify-center rounded-full bg-foreground/10 backdrop-blur">
-                  <svg viewBox="0 0 24 24" className="ml-0.5 size-4 fill-foreground" aria-hidden="true">
-                    <path d="M8 5v14l11-7z" />
-                  </svg>
-                </span>
-              </div>
-              <div className="flex items-center justify-between gap-2 p-3">
-                <div className="min-w-0">
-                  <p className="truncate text-sm font-medium">Clip {i} · the hook everyone shares</p>
-                  <p className="text-muted-foreground text-xs">Score {94 - i * 3} · 0:32</p>
-                </div>
-                <span className="glass text-muted-foreground flex size-8 shrink-0 items-center justify-center rounded-lg">
-                  <Download className="size-4" />
-                </span>
-              </div>
-            </div>
-          ))}
-        </div>
-      </div>
+      {/* The product film: link in, scored and captioned clips out. */}
+      <HeroFilm className="mt-16 max-w-5xl text-left" />
     </section>
   )
 }
