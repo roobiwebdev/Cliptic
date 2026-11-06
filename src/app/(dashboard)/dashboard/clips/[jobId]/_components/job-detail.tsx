@@ -51,6 +51,7 @@ import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import {
   stepsForMode,
   isActiveStatus,
+  STAGE_HINTS,
   statusBadgeVariant,
   statusLabel,
   type ClipItem,
@@ -82,24 +83,6 @@ function formatDurationMs(ms: number | undefined): string {
   const secs = Math.round(ms / 1000)
   if (secs < 60) return `${secs}s`
   return `${Math.floor(secs / 60)}m ${secs % 60}s`
-}
-
-/* Rotating flavour lines per stage — keeps the panel feeling alive during the
- * stages that don't emit granular server progress. */
-const STAGE_HINTS: Record<string, readonly string[]> = {
-  QUEUED: ['Waiting for a free worker…'],
-  DOWNLOADING: ['Fetching just the audio (fast & light)…', 'No full video download needed…'],
-  TRANSCRIBING: [
-    'Transcribing speech to text…',
-    'Aligning every word to a timestamp…',
-    'Longer videos take a little longer…',
-  ],
-  ANALYZING: [
-    'Reading the full transcript…',
-    'Finding the most viral moments…',
-    'Scoring hooks, payoffs & emotion…',
-  ],
-  CUTTING: ['Rendering clips…', 'Snapping edits to natural pauses…', 'Almost there…'],
 }
 
 function useAnimatedProgress(serverProgress: number, status: string, active: boolean): number {
