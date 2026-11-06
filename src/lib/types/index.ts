@@ -141,3 +141,16 @@ export type {
   EditorClipRefValues,
   SaveEditValues,
 } from './edit-spec'
+export { FILM_SOUNDS } from './product-film'
+export type {
+  FilmSound,
+  FilmPoint,
+  FilmRect,
+  FilmKeyframe,
+  FilmCue,
+  FilmChapter,
+  FilmCaption,
+  FilmPlayerSnapshot,
+  FilmSoundLayer,
+  FilmSoundPatch,
+} from './product-film'
