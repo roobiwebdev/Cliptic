@@ -201,6 +201,9 @@ export function OnboardingFlow() {
               title="Payment details"
               description="Enter your card to start your subscription."
             />
+            {/* DISCOUNT SEAM: the promo-code input mounts here once discounts
+                launch — validate via discountCodeSchema and pass `discountCode`
+                to billing.createSubscription (schema already accepts it). */}
             <StripeElementsProvider>
               <PaymentCardForm
                 submitLabel="Start subscription"

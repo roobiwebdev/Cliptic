@@ -20,6 +20,7 @@
  */
 
 import { z } from 'zod'
+import { discountCodeSchema } from './discount'
 
 const organizationIdSchema = z.string().min(1, 'Organization ID is required.')
 
@@ -39,12 +40,17 @@ export const createSubscriptionSchema = z.object({
    * uses it to surface a clear TRIAL_ALREADY_USED error (rather than silently
    * charging) when the card/user has already consumed a trial. */
   expectTrial: z.boolean().optional(),
+  /* DISCOUNT SEAM: accepted but ignored until the feature is built — see
+   * discount.service.resolveDiscount for the activation checklist. */
+  discountCode: discountCodeSchema.optional(),
 })
 
 export const upgradeSubscriptionSchema = z.object({
   organizationId: organizationIdSchema,
   planKey: planKeySchema,
   billingInterval: billingIntervalSchema,
+  /* DISCOUNT SEAM: accepted but ignored until the feature is built. */
+  discountCode: discountCodeSchema.optional(),
 })
 
 export type CreateSubscriptionValues = z.infer<typeof createSubscriptionSchema>

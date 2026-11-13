@@ -165,6 +165,11 @@ export const billingRouter = createTRPCRouter({
         })
       }
 
+      /* DISCOUNT SEAM: when discounts launch, resolve input.discountCode via
+       * discount.service.resolveDiscount and, when non-null, spread
+       * `discounts: [{ promotion_code: resolved.providerDiscountId }]` plus
+       * `metadata.discountCode` here (and in upgradeOrganization's create
+       * branch below). The input schema already accepts discountCode. */
       const subscription = await stripe.subscriptions.create({
         customer: customerId,
         items: [{ price: priceId }],
