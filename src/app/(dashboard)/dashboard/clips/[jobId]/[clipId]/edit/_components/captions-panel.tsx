@@ -21,8 +21,9 @@
 'use client'
 
 import * as React from 'react'
-import { Captions, Loader2 } from 'lucide-react'
-import { cn, formatClock } from '@/lib/utils'
+import { toast } from 'sonner'
+import { Captions, Copy, Loader2 } from 'lucide-react'
+import { cn, formatClock, formatCaptionsForCopy } from '@/lib/utils'
 import { CAPTION_FONTS, type CaptionFont, type CaptionStyle, type CaptionsSpec } from '@/lib/types'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -39,9 +40,16 @@ import {
 
 interface CaptionsPanelProps {
   captions: CaptionsSpec | undefined
+  /** Lines to DISPLAY regardless of the burn toggle — user-edited spec segments
+   *  when present, else the lines derived from the clip's transcript. */
+  viewSegments: ReadonlyArray<{ startSec: number; endSec: number; text: string }>
   hasTranscript: boolean
   seeding: boolean
+  /** An on-demand clip transcription is running (first toggle-on for a manual clip). */
+  transcribing: boolean
   onToggle: (enabled: boolean) => void
+  /** Transcribe WITHOUT enabling burn — just makes the lines visible/copyable. */
+  onTranscribe: () => void
   onStyleChange: (patch: Partial<CaptionStyle>) => void
   onSegmentText: (index: number, text: string) => void
   onReset: () => void
@@ -94,9 +102,12 @@ function ToggleRow({
 
 export function CaptionsPanel({
   captions,
+  viewSegments,
   hasTranscript,
   seeding,
+  transcribing,
   onToggle,
+  onTranscribe,
   onStyleChange,
   onSegmentText,
   onReset,
@@ -104,6 +115,19 @@ export function CaptionsPanel({
   const enabled = captions?.enabled ?? false
   const style = captions?.style
   const segments = captions?.segments ?? []
+  /* UI preference only (not part of the edit spec): drives BOTH the visible
+   * timestamps and whether Copy includes them. */
+  const [showTimestamps, setShowTimestamps] = React.useState(true)
+
+  const copyAll = async (): Promise<void> => {
+    if (viewSegments.length === 0) return
+    try {
+      await navigator.clipboard.writeText(formatCaptionsForCopy(viewSegments, showTimestamps))
+      toast.success(showTimestamps ? 'Captions copied with timestamps.' : 'Captions copied.')
+    } catch {
+      toast.error('Could not copy to the clipboard.')
+    }
+  }
 
   return (
     <Card className="glass">
@@ -115,20 +139,37 @@ export function CaptionsPanel({
           </span>
           <Switch
             checked={enabled}
-            disabled={!hasTranscript || seeding}
+            disabled={seeding || transcribing}
             onCheckedChange={onToggle}
             aria-label="Burn captions"
           />
         </CardTitle>
       </CardHeader>
       <CardContent className="space-y-4">
-        {!hasTranscript ? (
-          <p className="text-muted-foreground text-xs">
-            This clip has no transcript, so captions aren&apos;t available.
-          </p>
+        {!hasTranscript && viewSegments.length === 0 && !enabled && !transcribing ? (
+          <div className="space-y-2">
+            <p className="text-muted-foreground text-xs">
+              This clip hasn&apos;t been transcribed yet. Transcribe it to see and copy its
+              captions — any language, word for word. Turning captions on transcribes too.
+            </p>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="h-7 w-full text-xs"
+              onClick={onTranscribe}
+            >
+              Transcribe clip
+            </Button>
+          </div>
         ) : null}
 
-        {seeding ? (
+        {transcribing ? (
+          <div className="text-muted-foreground flex items-center gap-2 text-xs">
+            <Loader2 className="size-3 animate-spin" />
+            Transcribing this clip — exact words, auto-detected language…
+          </div>
+        ) : seeding ? (
           <div className="text-muted-foreground flex items-center gap-2 text-xs">
             <Loader2 className="size-3 animate-spin" />
             Loading captions from the transcript…
@@ -219,23 +260,47 @@ export function CaptionsPanel({
             <div className="space-y-2">
               <div className="flex items-center justify-between">
                 <p className="text-muted-foreground text-xs">Caption text</p>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  className="h-6 px-2 text-xs"
-                  onClick={onReset}
-                >
-                  Reset
-                </Button>
+                <div className="flex items-center gap-1">
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className="h-6 gap-1 px-2 text-xs"
+                    onClick={() => void copyAll()}
+                    disabled={segments.length === 0}
+                    aria-label="Copy all captions"
+                  >
+                    <Copy className="size-3" />
+                    Copy
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className="h-6 px-2 text-xs"
+                    onClick={onReset}
+                  >
+                    Reset
+                  </Button>
+                </div>
               </div>
+              {/* One toggle drives both what's SHOWN and what Copy includes. */}
+              <ToggleRow
+                label="Timestamps"
+                checked={showTimestamps}
+                onChange={setShowTimestamps}
+              />
               <div className="max-h-56 space-y-2 overflow-y-auto pr-1">
                 {segments.length === 0 ? (
                   <p className="text-muted-foreground text-xs">No caption lines in this window.</p>
                 ) : (
                   segments.map((s, i) => (
                     <div key={`${i}-${s.startSec}`} className="space-y-1">
-                      <span className="text-muted-foreground text-[10px]">{formatClock(s.startSec)}</span>
+                      {showTimestamps ? (
+                        <span className="text-muted-foreground text-[10px]">
+                          {formatClock(s.startSec)}
+                        </span>
+                      ) : null}
                       <Input
                         value={s.text}
                         onChange={(e) => onSegmentText(i, e.target.value)}
@@ -247,6 +312,43 @@ export function CaptionsPanel({
               </div>
             </div>
           </>
+        ) : null}
+
+        {/* Transcript is ALWAYS visible once it exists — the burn toggle only
+         * decides whether these lines get styled + burned into the export. */}
+        {!enabled && viewSegments.length > 0 ? (
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <p className="text-muted-foreground text-xs">Transcript</p>
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className="h-6 gap-1 px-2 text-xs"
+                onClick={() => void copyAll()}
+                aria-label="Copy transcript"
+              >
+                <Copy className="size-3" />
+                Copy
+              </Button>
+            </div>
+            <ToggleRow label="Timestamps" checked={showTimestamps} onChange={setShowTimestamps} />
+            <div className="max-h-56 space-y-1.5 overflow-y-auto pr-1">
+              {viewSegments.map((s, i) => (
+                <p key={`${i}-${s.startSec}`} className="text-xs leading-snug">
+                  {showTimestamps ? (
+                    <span className="text-muted-foreground mr-1.5 text-[10px]">
+                      {formatClock(s.startSec)}
+                    </span>
+                  ) : null}
+                  {s.text}
+                </p>
+              ))}
+            </div>
+            <p className="text-muted-foreground text-[10px]">
+              Turn captions on to style these lines and burn them into the export.
+            </p>
+          </div>
         ) : null}
       </CardContent>
     </Card>

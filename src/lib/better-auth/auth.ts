@@ -28,12 +28,14 @@ import {
 } from 'better-auth/plugins'
 import { nextCookies } from 'better-auth/next-js'
 import { cache } from 'react'
-import { headers } from 'next/headers'
+import { headers, cookies } from 'next/headers'
 
 import { prisma } from '@/lib/config'
 import { ac, roles } from '@/lib/better-auth/permissions'
 import { APP_URL, APP_NAME, APP_DOMAIN } from '@/lib/config/branding'
 import { REGISTRATION_OPEN } from '@/lib/config/registration'
+import { REFERRAL_COOKIE_NAME } from '@/lib/config/referral'
+import { recordReferralAttribution } from '@/services/referral.service'
 import { isDevEmailFallbackActive } from '@/lib/config/resend'
 import {
   sendVerificationEmail as sendVerificationEmailService,
@@ -132,6 +134,19 @@ export const auth = betterAuth({
             throw new Error(
               'Registration is currently closed. This platform is invitation-only.'
             )
+          }
+        },
+        /* Referral attribution: read the first-touch ref_code cookie (set by
+         * proxy.ts) and record "referred by X". Entirely fail-soft — signup
+         * must never break over attribution, and cookies() throws outside a
+         * request scope (e.g. seeded/admin creations), which we swallow. */
+        after: async (user) => {
+          try {
+            const cookieStore = await cookies()
+            const code = cookieStore.get(REFERRAL_COOKIE_NAME)?.value
+            if (code) await recordReferralAttribution(code, user.id)
+          } catch (err) {
+            console.warn('[auth] referral attribution skipped:', err)
           }
         },
       },

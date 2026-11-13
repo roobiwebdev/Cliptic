@@ -70,6 +70,10 @@ export const storageKeys = {
     `orgs/${organizationId}/clip-edits/${clipEditId}/edited.mp4`,
   clipEditThumbnailKey: (organizationId: string, clipEditId: string): string =>
     `orgs/${organizationId}/clip-edits/${clipEditId}/edited.jpg`,
+  /** On-demand CLIP-LEVEL transcript (clip-relative words) — the caption
+   *  fallback for clips whose job was never transcribed (manual cuts). */
+  clipTranscriptKey: (organizationId: string, clipId: string): string =>
+    `orgs/${organizationId}/clip-transcripts/${clipId}/transcript.json`,
 }
 
 const DEFAULT_DOWNLOAD_TTL_SEC = 300 // 5 min
