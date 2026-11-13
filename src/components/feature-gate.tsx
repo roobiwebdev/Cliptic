@@ -59,7 +59,16 @@ export interface FeatureGateProps {
   optimistic?: boolean
 }
 
-const FEATURE_GATES_QUERY_OPTIONS = {
+/**
+ * SOURCE OF TRUTH KEYWORDS: FEATURE_GATES_QUERY_OPTIONS
+ *
+ * WHAT:  Shared cache tuning for every consumer of usage.getFeatureGates.
+ * WHY:   All readers (gate wrapper, billing alert banner) must share ONE cache
+ *        entry — same options, same key — so the layout prefetch serves them
+ *        all without extra fetches.
+ * WHERE: useFeatureGate below + BillingAlertBanner.
+ */
+export const FEATURE_GATES_QUERY_OPTIONS = {
   staleTime: 1000 * 60 * 5,
   gcTime: 1000 * 60 * 30,
 } as const

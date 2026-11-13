@@ -42,3 +42,8 @@ yarn-error.log*
 next-env.d.ts
 
 /src/generated/prisma
+
+# Stripe CLI agent-skill artifacts (local tooling, not app code)
+.agents/
+.claude/skills/
+skills-lock.json
