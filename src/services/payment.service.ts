@@ -10,7 +10,8 @@ import 'server-only'
 /**
  * SOURCE OF TRUTH KEYWORDS: resolveExistingStripeCustomerId, ensureStripeCustomer,
  *   listPaymentMethods, getOrganizationSubscription, PaymentMethodSummary,
- *   attachPaymentMethod, detachPaymentMethod, setDefaultPaymentMethod
+ *   attachPaymentMethod, detachPaymentMethod, setDefaultPaymentMethod,
+ *   resolveBillingRecipient, payLatestOpenInvoice
  *
  * WHAT:  Stripe customer + payment-method helpers and the org's local
  *        subscription read.
@@ -23,7 +24,8 @@ import 'server-only'
  *        getStripeClient and to Prisma for the customer handle + subscription.
  */
 
-import { getStripeClient } from '@/lib/config/stripe'
+import Stripe from 'stripe'
+import { getStripeClient, STRIPE_PLATFORM } from '@/lib/config/stripe'
 import { prisma } from '@/lib/config/prisma'
 
 export interface PaymentMethodSummary {
@@ -85,10 +87,12 @@ export async function ensureStripeCustomer(
     }
   }
 
+  /* `platform` isolates Cliptic's objects inside the SHARED Stripe account —
+   * every object we create must carry it (see STRIPE_PLATFORM). */
   const customer = await stripe.customers.create({
     email: params.email,
     name: params.name,
-    metadata: { organizationId },
+    metadata: { organizationId, platform: STRIPE_PLATFORM },
   })
 
   await prisma.organization.update({
@@ -205,4 +209,83 @@ export async function getOrganizationSubscription(organizationId: string) {
     where: { referenceId: organizationId },
     orderBy: { createdAt: 'desc' },
   })
+}
+
+/**
+ * SOURCE OF TRUTH KEYWORDS: resolveBillingRecipient, dunning
+ *
+ * WHAT:  The org owner's email + name and the org name — who billing emails
+ *        (payment failed, trial ending) go to.
+ * WHY:   Billing is owner business: the owner picked the plan and owns the
+ *        card, so dunning goes to them, not to every member.
+ * WHERE: Called by the Stripe webhook route before sendPaymentFailedEmail /
+ *        sendTrialEndingEmail.
+ */
+export async function resolveBillingRecipient(
+  organizationId: string
+): Promise<{ email: string; name: string; organizationName: string } | null> {
+  const owner = await prisma.member.findFirst({
+    where: { organizationId, role: 'owner' },
+    select: {
+      user: { select: { email: true, name: true } },
+      organization: { select: { name: true } },
+    },
+  })
+  if (!owner?.user.email) return null
+  return {
+    email: owner.user.email,
+    name: owner.user.name,
+    organizationName: owner.organization.name,
+  }
+}
+
+/**
+ * SOURCE OF TRUTH KEYWORDS: payLatestOpenInvoice, retryPayment, dunning
+ *
+ * WHAT:  Pays the subscription's latest invoice if it is `open` (a failed
+ *        charge leaves the invoice open), optionally with a specific payment
+ *        method; no-ops when there is nothing to pay.
+ * WHY:   The past_due recovery path — "Retry payment" shouldn't wait for
+ *        Stripe's next Smart Retry. The webhook remains the single writer of
+ *        the Subscription row; a successful pay triggers
+ *        customer.subscription.updated which flips status back to active.
+ * WHERE: billing.retryPayment (customerId/subscription resolved from the org,
+ *        so the call is tenant-scoped by construction).
+ */
+export async function payLatestOpenInvoice(
+  organizationId: string,
+  paymentMethodId?: string
+): Promise<{ paid: boolean; invoiceStatus: string | null; declineMessage?: string }> {
+  const subscription = await getOrganizationSubscription(organizationId)
+  if (!subscription?.stripeSubscriptionId) {
+    return { paid: false, invoiceStatus: null }
+  }
+
+  const stripe = getStripeClient()
+  const stripeSubscription = await stripe.subscriptions.retrieve(
+    subscription.stripeSubscriptionId,
+    { expand: ['latest_invoice'] }
+  )
+
+  const latestInvoice = stripeSubscription.latest_invoice
+  const invoice =
+    latestInvoice && typeof latestInvoice !== 'string' ? latestInvoice : null
+  if (!invoice?.id || invoice.status !== 'open') {
+    return { paid: false, invoiceStatus: invoice?.status ?? null }
+  }
+
+  try {
+    const paidInvoice = await stripe.invoices.pay(
+      invoice.id,
+      paymentMethodId ? { payment_method: paymentMethodId } : {}
+    )
+    return { paid: paidInvoice.status === 'paid', invoiceStatus: paidInvoice.status ?? null }
+  } catch (err) {
+    /* Card declined again — a user-facing outcome, not a server fault. The
+     * router turns declineMessage into a BAD_REQUEST toast. */
+    if (err instanceof Stripe.errors.StripeCardError) {
+      return { paid: false, invoiceStatus: 'open', declineMessage: err.message }
+    }
+    throw err
+  }
 }

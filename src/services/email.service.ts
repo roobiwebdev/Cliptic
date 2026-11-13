@@ -9,7 +9,8 @@ import 'server-only'
 
 /**
  * SOURCE OF TRUTH KEYWORDS: sendVerificationEmail, sendPasswordResetEmail,
- *   sendOrganizationInvitationEmail, EmailSendResult, renderAndSend
+ *   sendOrganizationInvitationEmail, sendPaymentFailedEmail,
+ *   sendTrialEndingEmail, EmailSendResult, renderAndSend
  *
  * WHAT:  The single transactional-email abstraction — renders a React Email
  *        template to HTML and sends it through Resend.
@@ -34,6 +35,8 @@ import {
   EmailVerificationEmail,
   PasswordResetEmail,
   TeamInvitationEmail,
+  PaymentFailedEmail,
+  TrialEndingEmail,
 } from '@/lib/email-templates'
 import { recordDevEmail } from '@/lib/dev-email-outbox'
 
@@ -163,5 +166,53 @@ export function sendOrganizationInvitationEmail(args: {
       ...(args.role !== undefined ? { role: args.role } : {}),
     }),
     devLink: args.invitationLink,
+  })
+}
+
+/**
+ * SOURCE OF TRUTH KEYWORDS: sendPaymentFailedEmail, dunning
+ *
+ * WHAT:  Sends the "payment failed" dunning message with a billing-page link.
+ * WHERE: Called by the Stripe webhook route on invoice.payment_failed (every
+ *        retry attempt, per product decision).
+ */
+export function sendPaymentFailedEmail(args: {
+  to: string
+  organizationName: string
+  billingLink: string
+}): Promise<EmailSendResult> {
+  return renderAndSend({
+    to: args.to,
+    subject: `Payment failed for ${args.organizationName}`,
+    template: React.createElement(PaymentFailedEmail, {
+      organizationName: args.organizationName,
+      billingLink: args.billingLink,
+    }),
+    devLink: args.billingLink,
+  })
+}
+
+/**
+ * SOURCE OF TRUTH KEYWORDS: sendTrialEndingEmail, trial_will_end
+ *
+ * WHAT:  Sends the "trial ends soon" heads-up with a billing-page link.
+ * WHERE: Called by the Stripe webhook route on
+ *        customer.subscription.trial_will_end.
+ */
+export function sendTrialEndingEmail(args: {
+  to: string
+  organizationName: string
+  trialEndDate: string
+  billingLink: string
+}): Promise<EmailSendResult> {
+  return renderAndSend({
+    to: args.to,
+    subject: `Your ${args.organizationName} trial ends soon`,
+    template: React.createElement(TrialEndingEmail, {
+      organizationName: args.organizationName,
+      trialEndDate: args.trialEndDate,
+      billingLink: args.billingLink,
+    }),
+    devLink: args.billingLink,
   })
 }
